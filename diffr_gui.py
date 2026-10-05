@@ -1544,11 +1544,95 @@ class App(tk.Tk):
             "choices.")).grid(row=9, column=0, columnspan=4, sticky="w",
                               pady=(4, 0))
 
-        pv = section(tab, "Preview", 3)
+        k = section(tab, "Run / sweep number  ({run} in the names)", 3)
+        self.next_run_var = tk.StringVar(value="1")
+        ttk.Label(k, text="Next number").grid(row=0, column=0, sticky="w")
+        sp = ttk.Spinbox(k, from_=1, to=999999, increment=1, width=8,
+                         textvariable=self.next_run_var)
+        sp.grid(row=0, column=1, sticky="w", padx=4)
+        Tooltip(sp, "Single runs and sweeps share one counter. Type a number "
+                    "(or use the arrows) to choose what the next run or sweep "
+                    "is called.")
+        ttk.Button(k, text="Reset to 1…", command=self.reset_counter).grid(
+            row=0, column=2, sticky="w", padx=4)
+        self.counter_msg = ttk.Label(k, foreground=INK2)
+        self.counter_msg.grid(row=0, column=3, sticky="w", padx=4)
+        ttk.Checkbutton(k, text="Ask before overwriting existing files",
+                        variable=ov["ask_overwrite"]).grid(
+            row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        ttk.Label(k, foreground=INK2, wraplength=500, justify="left", text=(
+            "Set the number back (e.g. to 1) to write again under the same "
+            "names as before, for example to replace an earlier series. With "
+            "the box above ticked you are asked first; untick it to overwrite "
+            "without asking (the log still lists what was replaced).")).grid(
+            row=2, column=0, columnspan=4, sticky="w", pady=(2, 0))
+        self.next_run_var.trace_add("write", lambda *_: self._on_counter_edit())
+
+        pv = section(tab, "Preview", 4)
         self.out_preview = ttk.Label(pv, foreground=INK2, wraplength=540,
                                      justify="left")
         self.out_preview.grid(row=0, column=0, sticky="w")
         self._preview_job = None
+
+    # --- the run / sweep counter
+    def _on_counter_edit(self):
+        if getattr(self, "_setting_counter", False):
+            return
+        try:
+            n = int(self.next_run_var.get())
+            if n < 1:
+                raise ValueError
+        except ValueError:
+            self.counter_msg.config(text="enter a whole number ≥ 1",
+                                    foreground="#c00000")
+            return
+        self.run_counter = n - 1
+        self.counter_msg.config(text="", foreground=INK2)
+        self.schedule_preview()
+
+    def _set_counter(self, run_counter):
+        self.run_counter = run_counter
+        self._setting_counter = True
+        try:
+            self.next_run_var.set(str(run_counter + 1))
+        finally:
+            self._setting_counter = False
+        self.counter_msg.config(text="")
+        self.schedule_preview()
+
+    def reset_counter(self):
+        if not messagebox.askyesno(
+                "Reset counter",
+                f"The next run/sweep is number {self.run_counter + 1}.\n\n"
+                f"Reset it to 1? File names that use {{run}} will then repeat "
+                f"names used before, so earlier files can be overwritten"
+                + (" (you will be asked first)." if self.out["ask_overwrite"].get()
+                   else " WITHOUT asking, because 'Ask before overwriting' is "
+                        "off.")):
+            return
+        self._set_counter(0)
+        self.log("run/sweep counter reset: the next one is number 1")
+
+    def _unique_tag(self, tag):
+        """'run 3' or 'sweep 3', made unique among the runs in memory (the
+        counter may have been set back)."""
+        labels = [r["label"] for r in self.all_runs()]
+        taken = lambda t: any(l == t or l.startswith(t + ":") for l in labels)
+        k, out = 2, tag
+        while taken(out):
+            out, k = f"{tag} ({k})", k + 1
+        return out
+
+    def _confirm_overwrite(self, existing, title):
+        if not existing:
+            return True
+        if self.out["ask_overwrite"].get():
+            return messagebox.askyesno(
+                title, f"{len(existing)} output file(s) already exist, e.g.\n"
+                       f"{existing[0]}\n\nOverwrite them?")
+        self.log(f"overwriting {len(existing)} existing file(s), e.g. "
+                 f"{existing[0]}", "warn")
+        return True
 
     def _browse_out_dir(self):
         d = filedialog.askdirectory(title="Folder for the output files",
@@ -2164,12 +2248,11 @@ class App(tk.Tk):
         if base:
             sfx = O.run_files(self._opts()) + [
                 f"_{k}.{self.out['fig_format'].get()}" for k in FIGURE_PANELS]
-            ex = self._existing([base], sfx)
-            if ex and not messagebox.askyesno(
-                    "Overwrite?", f"{ex[0]}\nalready exists. Overwrite?"):
+            if not self._confirm_overwrite(self._existing([base], sfx),
+                                           "Overwrite?"):
                 return
-        self.run_counter += 1
-        label = f"run {self.run_counter}"
+        label = self._unique_tag(f"run {self.run_counter + 1}")
+        self._set_counter(self.run_counter + 1)
         self.log(f"— {label}: started; estimated time: "
                  f"{self._time_estimate(plan['works'])}", "head")
         if base:
@@ -2198,14 +2281,11 @@ class App(tk.Tk):
             ex += self._existing([p["cbase"]], [".csv", ".npz"])
         if p["figbase"]:
             ex += self._existing([p["figbase"]], [f"_dRR.{fmt}", f"_stack.{fmt}"])
-        if ex and not messagebox.askyesno(
-                "Sweep", f"{len(ex)} output file(s) already exist, e.g.\n"
-                         f"{ex[0]}\n\nOverwrite them?"):
+        if not self._confirm_overwrite(ex, "Sweep"):
             return
         name = self.layers[idx]["material"]
         jobs = []
-        self.run_counter += 1
-        tag = f"sweep {self.run_counter}"
+        tag = self._unique_tag(f"sweep {self.run_counter + 1}")
         for j, v in enumerate(vals):
             layers = copy.deepcopy(self.layers)
             layers[idx]["d"], layers[idx]["d_unit"] = f"{v:g}", unit
@@ -2219,6 +2299,7 @@ class App(tk.Tk):
                              sweep_value=v, sweep_unit=unit,
                              sweep_nm=U.to_base(v, "thickness", unit),
                              save_base=bases[j] if bases else None))
+        self._set_counter(self.run_counter + 1)
         self.log(f"— {tag}: started", "head")
         self.log("   " + self._describe_sweep(p).replace("\n", "\n   "))
         self._start(jobs, dict(kind="sweep", combined=p["cbase"],
@@ -2449,6 +2530,7 @@ class App(tk.Tk):
                                step=self.sweep_step.get(),
                                unit=self.sweep_unit.get()),
                     output=self._opts(),
+                    next_run=self.run_counter + 1,
                     plot_styles={name: {str(k): v for k, v in pan.styles.items()}
                                  for name, pan in FIGURE_PANELS_MAP(self).items()})
 
@@ -2483,6 +2565,8 @@ class App(tk.Tk):
         out.update({k: v for k, v in st.get("output", {}).items() if k in out})
         for k, v in out.items():
             self.out[k].set(v)
+        if "next_run" in st:
+            self._set_counter(max(0, int(st["next_run"]) - 1))
         for name, pan in FIGURE_PANELS_MAP(self).items():
             pan.styles = {int(k): v for k, v in
                           st.get("plot_styles", {}).get(name, {}).items()}

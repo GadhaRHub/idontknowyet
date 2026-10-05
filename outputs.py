@@ -44,6 +44,7 @@ def default_options():
         meta_json=True,
         figures=False, fig_format="png", fig_dpi="150", fig_drr=True,
         fig_stack=False, fig_extra=False,
+        ask_overwrite=True,
     )
 
 

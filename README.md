@@ -107,6 +107,13 @@ To add a unit, add one entry to `UNITS` in `units.py`.
     and figures (ΔR/R, stack diagram, the extra plots shown; PNG/PDF/SVG at a
     chosen dpi). Figures are saved as they look on screen, with your labels
     and colours.
+  - *Run / sweep number*: single runs and sweeps share one counter, which
+    `{run}` puts in the names. Type the next number yourself, or press
+    *Reset to 1…* (it asks for confirmation) to reuse earlier names, e.g. to
+    replace an earlier series of files. *Ask before overwriting existing
+    files* (on by default) decides whether you are asked before files are
+    replaced; when it is off, the log lists what was overwritten. The
+    counter is saved with the session.
   - A preview lists the next file names, how many files and roughly how much
     space. File → Export uses the same choices.
 - **Run time**: the status bar shows the time elapsed while running, and
