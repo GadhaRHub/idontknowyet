@@ -268,18 +268,20 @@ def range_values(start, end, step, max_n=10000):
 
 _BAD_FILE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
-NAME_FIELDS = "{material} {layer} {d} {unit} {i} {n}"
+# units written into file names without non-ASCII characters
+FILE_UNIT_NAMES = {"µm": "um", "Å": "A"}
 
 
 def format_name(template, **fields):
     """Fill a file-name template such as 'dRR_{material}_{d}{unit}' and make
     the result safe as a Windows/Linux file name. Raises ValueError for an
-    unknown {field}."""
+    unknown {field}, naming the fields that can be used."""
     try:
         name = template.format(**fields)
     except KeyError as e:
+        avail = " ".join("{%s}" % k for k in fields)
         raise ValueError(f"unknown field {{{e.args[0]}}} in the file name; "
-                         f"use {NAME_FIELDS}") from None
+                         f"available here: {avail}") from None
     except (IndexError, ValueError) as e:
         raise ValueError(f"file name template: {e}") from None
     name = _BAD_FILE_CHARS.sub("_", name).strip().rstrip(".")

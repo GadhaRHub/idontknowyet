@@ -11,10 +11,10 @@ Needs numpy and matplotlib; tkinter ships with Python.
 """
 
 import copy
-import json
 import os
 import queue
 import threading
+import time
 import traceback
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser
@@ -30,6 +30,7 @@ from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg,
                                                NavigationToolbar2Tk)
 
 import diffr_model as M
+import outputs as O
 import sample_input as S
 import units as U
 
@@ -135,11 +136,11 @@ class PlotPanel(ttk.Frame):
     """A matplotlib figure with the standard toolbar (zoom, pan, home, save),
     scroll-wheel zoom, and an editor for titles, labels, limits and scales.
 
-    Label/scale edits are remembered and re-applied each time the panel is
-    redrawn, until "Reset labels" is pressed.
+    Label/scale edits and colour choices are remembered and re-applied each
+    time the panel is redrawn, until they are reset.
     """
 
-    def __init__(self, master, figsize=(7, 4)):
+    def __init__(self, master, figsize=(7, 4), colors=True):
         super().__init__(master)
         self.fig = Figure(figsize=figsize, dpi=100, layout="constrained")
         bar = ttk.Frame(self)
@@ -151,6 +152,12 @@ class PlotPanel(ttk.Frame):
         self.controls.pack(side="right", padx=4)
         ttk.Button(bar, text="Reset labels", command=self.reset_overrides
                    ).pack(side="right", padx=2)
+        if colors:
+            b = ttk.Button(bar, text="Colours…", command=self.edit_colors)
+            b.pack(side="right", padx=2)
+            Tooltip(b, "Change the colour of each curve, colour all curves "
+                       "from a colour map, or change the colour map of an "
+                       "image plot")
         b = ttk.Button(bar, text="Axes & labels…", command=self.edit_axes)
         b.pack(side="right", padx=(8, 2))
         Tooltip(b, "Edit title, axis labels, limits, log/linear scale, grid, "
@@ -160,14 +167,18 @@ class PlotPanel(ttk.Frame):
         self.toolbar.pack(side="left", fill="x", expand=True)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self.overrides = {}
+        self.styles = {}            # axes index -> colour choices
+        self.colorbars = []
         self.canvas.mpl_connect("scroll_event", self._on_scroll)
 
     # --- drawing protocol: clear() ... draw your axes ... finish()
     def clear(self):
         self.fig.clear()
+        self.colorbars = []
         return self.fig
 
     def finish(self):
+        self.apply_styles()
         self.apply_overrides()
         self.canvas.draw_idle()
         self.toolbar.update()          # resets the home view to this drawing
@@ -214,6 +225,51 @@ class PlotPanel(ttk.Frame):
                 ax.set_xlim(o["xlim"])
                 ax.set_ylim(o["ylim"])
 
+    # --- user colour choices
+    @staticmethod
+    def data_lines(ax):
+        """The curves of an axes (not zero lines or interface markers)."""
+        return [l for l in ax.get_lines() if l.get_gid() != "ref"]
+
+    @staticmethod
+    def line_key(line, j):
+        lab = line.get_label()
+        return f"curve {j + 1}" if lab.startswith("_") else lab
+
+    def apply_styles(self):
+        axes = self.data_axes()
+        for i, ax in enumerate(axes):
+            st = self.styles.get(i)
+            if not st:
+                continue
+            lines = self.data_lines(ax)
+            if st.get("line_cmap"):
+                for l, c in zip(lines, cmap_colors(st["line_cmap"], len(lines))):
+                    l.set_color(c)
+            for j, l in enumerate(lines):
+                c = st.get("lines", {}).get(self.line_key(l, j))
+                if c:
+                    l.set_color(c)
+            if st.get("image_cmap"):
+                for im in ax.images:
+                    im.set_cmap(st["image_cmap"])
+            leg = ax.get_legend()
+            if leg is not None:                 # legends copy the colours
+                fs = leg.get_texts()[0].get_fontsize() if leg.get_texts() else None
+                vis = leg.get_visible()
+                new = ax.legend(fontsize=fs, ncols=getattr(leg, "_ncols", 1))
+                new.set_draggable(True)
+                new.set_visible(vis)
+        for cb in self.colorbars:
+            cb.update_normal(cb.mappable)
+
+    def edit_colors(self):
+        axes = self.data_axes()
+        if not axes or not any(a.axison for a in axes):
+            messagebox.showinfo("Colours", "Nothing plotted yet.", parent=self)
+            return
+        PlotColorDialog(self)
+
     def reset_overrides(self):
         self.overrides.clear()
         if hasattr(self, "redraw"):
@@ -244,6 +300,146 @@ class PlotPanel(ttk.Frame):
         if ax.get_yscale() in ("linear", "log"):
             ax.set_ylim(zoom(ax.get_ylim(), e.ydata, ax.get_yscale()))
         self.canvas.draw_idle()
+
+
+LINE_CMAPS = ["tab10", "Blues", "viridis", "plasma", "cividis", "magma",
+              "coolwarm", "Greys", "Dark2", "Set1"]
+IMAGE_CMAPS = ["RdBu_r", "coolwarm", "seismic", "PuOr_r", "bwr", "viridis",
+               "inferno", "gray"]
+
+
+def cmap_colors(name, n):
+    """n colours from a matplotlib colour map (cycled for qualitative maps,
+    spread over the map otherwise)."""
+    cm = colormaps[name]
+    if getattr(cm, "N", 256) <= 20:            # qualitative map, e.g. tab10
+        return [cm(i % cm.N) for i in range(n)]
+    if n == 1:
+        return [cm(0.65)]
+    return [cm(0.25 + 0.7 * i / (n - 1)) for i in range(n)]
+
+
+class PlotColorDialog(tk.Toplevel):
+    """Colours of the curves (and image colour map) of one plot panel."""
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.panel = panel
+        self.title("Plot colours")
+        self.transient(panel.winfo_toplevel())
+        self.minsize(420, 200)
+        top = ttk.Frame(self, padding=10)
+        top.pack(fill="x")
+        self.which = tk.StringVar()
+        axes = panel.data_axes()
+        names = [f"{i + 1}: {a.get_title() or '(untitled)'}"
+                 for i, a in enumerate(axes)]
+        self.which.set(names[0])
+        if len(axes) > 1:
+            ttk.Label(top, text="Plot").pack(side="left")
+            cb = ttk.Combobox(top, textvariable=self.which, values=names,
+                              state="readonly", width=48)
+            cb.pack(side="left", padx=4)
+            cb.bind("<<ComboboxSelected>>", lambda e: self.build())
+        self.body = ScrollableFrame(self)
+        self.body.pack(fill="both", expand=True, padx=10)
+        bb = ttk.Frame(self, padding=10)
+        bb.pack(fill="x")
+        ttk.Button(bb, text="Reset colours of this plot",
+                   command=self.reset).pack(side="left")
+        ttk.Button(bb, text="Close", command=self.destroy).pack(side="right")
+        self.build()
+
+    def idx(self):
+        return int(self.which.get().split(":")[0]) - 1
+
+    def style(self):
+        return self.panel.styles.setdefault(self.idx(), {"lines": {}})
+
+    def build(self):
+        p = self.body.inner
+        for w in p.winfo_children():
+            w.destroy()
+        ax = self.panel.data_axes()[self.idx()]
+        lines = PlotPanel.data_lines(ax)
+        r = 0
+        if lines:
+            ttk.Label(p, text="Curves", font=("TkDefaultFont", 9, "bold")).grid(
+                row=r, column=0, sticky="w", pady=(0, 2))
+            r += 1
+            for j, l in enumerate(lines):
+                key = PlotPanel.line_key(l, j)
+                ttk.Label(p, text=key).grid(row=r, column=0, sticky="w", padx=(0, 8))
+                sw = tk.Label(p, width=6, relief="solid", borderwidth=1,
+                              background=matplotlib.colors.to_hex(l.get_color()),
+                              cursor="hand2")
+                sw.grid(row=r, column=1, pady=1)
+                sw.bind("<Button-1>", lambda e, k=key, ln=l: self.pick(k, ln))
+                ttk.Button(p, text="Change…", command=lambda k=key, ln=l:
+                           self.pick(k, ln)).grid(row=r, column=2, padx=4)
+                r += 1
+            f = ttk.Frame(p)
+            f.grid(row=r, column=0, columnspan=3, sticky="w", pady=(8, 2))
+            ttk.Label(f, text="Colour all curves from").pack(side="left")
+            self.line_cmap = tk.StringVar(value=self.style().get("line_cmap") or
+                                          LINE_CMAPS[0])
+            ttk.Combobox(f, textvariable=self.line_cmap, values=LINE_CMAPS,
+                         width=10).pack(side="left", padx=4)
+            ttk.Button(f, text="Apply", command=self.apply_line_cmap).pack(side="left")
+            r += 1
+        if ax.images:
+            f = ttk.Frame(p)
+            f.grid(row=r, column=0, columnspan=3, sticky="w", pady=(8, 2))
+            ttk.Label(f, text="Image colour map").pack(side="left")
+            self.img_cmap = tk.StringVar(value=self.style().get("image_cmap") or
+                                         ax.images[0].get_cmap().name)
+            cb = ttk.Combobox(f, textvariable=self.img_cmap, values=IMAGE_CMAPS,
+                              width=10)
+            cb.pack(side="left", padx=4)
+            ttk.Button(f, text="Apply", command=self.apply_img_cmap).pack(side="left")
+            ttk.Label(p, foreground=INK2, text="Any matplotlib colour map name "
+                      "can be typed; add _r to reverse it.").grid(
+                row=r + 1, column=0, columnspan=3, sticky="w")
+        if not lines and not ax.images:
+            ttk.Label(p, text="This plot has no curves.").grid(row=0, column=0)
+
+    def _redraw(self):
+        self.panel.apply_styles()
+        self.panel.canvas.draw_idle()
+        self.build()
+
+    def pick(self, key, line):
+        _, hexcol = colorchooser.askcolor(
+            color=matplotlib.colors.to_hex(line.get_color()), parent=self,
+            title=f"Colour for {key}")
+        if hexcol:
+            self.style().setdefault("lines", {})[key] = hexcol
+            self._redraw()
+
+    def apply_line_cmap(self):
+        name = self.line_cmap.get().strip()
+        if name not in colormaps:
+            messagebox.showerror("Colours", f"Unknown colour map {name!r}.",
+                                 parent=self)
+            return
+        st = self.style()
+        st["line_cmap"], st["lines"] = name, {}
+        self._redraw()
+
+    def apply_img_cmap(self):
+        name = self.img_cmap.get().strip()
+        if name not in colormaps:
+            messagebox.showerror("Colours", f"Unknown colour map {name!r}.",
+                                 parent=self)
+            return
+        self.style()["image_cmap"] = name
+        self._redraw()
+
+    def reset(self):
+        self.panel.styles.pop(self.idx(), None)
+        if hasattr(self.panel, "redraw"):
+            self.panel.redraw()
+        self.build()
 
 
 class AxesDialog(tk.Toplevel):
@@ -483,6 +679,7 @@ class App(tk.Tk):
         self.cache = S.DispersionCache()
         self.layers, self.sel, self._loading = [], None, False
         self.batches, self.run_counter = [], 0
+        self.work_rate = None            # seconds per grid-cell update, measured
         self.queue, self.worker = queue.Queue(), None
         self.cancel_ev = threading.Event()
         self._stack_job = None
@@ -501,20 +698,26 @@ class App(tk.Tk):
         self.view_run = tk.StringVar()
 
         self._build_menu()
+        try:                         # thicker, easier-to-grab dividers
+            ttk.Style(self).configure("Sash", sashthickness=7)
+        except tk.TclError:
+            pass
         outer = ttk.PanedWindow(self, orient="horizontal")
         outer.pack(fill="both", expand=True)
         left = ttk.PanedWindow(outer, orient="vertical")
         right = ttk.Frame(outer)
         outer.add(left, weight=0)
         outer.add(right, weight=1)
+        self.outer = outer
 
         top = ttk.Frame(left)
         left.add(top, weight=3)
-        self.tabs = ttk.Notebook(top, width=600)
+        self.tabs = ttk.Notebook(top, width=620)
         self.tabs.pack(fill="both", expand=True)
         self._build_experiment_tab()
         self._build_layers_tab()
         self._build_sweep_tab()
+        self._build_output_tab()
         self._build_run_bar(top)
         logf = ttk.Frame(left)
         left.add(logf, weight=1)
@@ -531,7 +734,13 @@ class App(tk.Tk):
         for w in ("pump", "probe"):
             for var in self.cfg_vars[f"lambda_{w}_nm"]:
                 var.trace_add("write", lambda *_: self.schedule_file_nk())
+        for v, u in self.cfg_vars.values():       # sizes and times depend on these
+            v.trace_add("write", lambda *_: self.schedule_preview())
+            u.trace_add("write", lambda *_: self.schedule_preview())
+        self.show_strain.trace_add("write", lambda *_: self.schedule_preview())
         self.load_example()
+        # start with room for the controls; the divider can be dragged
+        self.after(80, lambda: self.outer.sashpos(0, 700))
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(100, self._poll)
 
@@ -630,40 +839,63 @@ class App(tk.Tk):
     def _build_layers_tab(self):
         tab = ttk.Frame(self.tabs)
         self.tabs.add(tab, text="Layers")
-        ttk.Label(tab, foreground=INK2, wraplength=580, justify="left",
-                  text="Light enters through layer 1 (top of the list). The last "
-                       "layer is the semi-infinite substrate. Click a layer to "
-                       "edit it, or click it in the stack diagram.").pack(
-            anchor="w", padx=6, pady=(6, 2))
-        tf = ttk.Frame(tab)
-        tf.pack(fill="x", padx=6)
+        hint = ttk.Label(tab, foreground=INK2, justify="left",
+                         text="Light enters through layer 1 (top of the list). The "
+                              "last layer is the semi-infinite substrate. Click a "
+                              "layer to edit it, or click it in the stack diagram. "
+                              "Drag the dividers to resize the list, the editor "
+                              "and the whole left panel.")
+        hint.pack(anchor="w", fill="x", padx=6, pady=(6, 2))
+        hint.bind("<Configure>", lambda e: hint.config(wraplength=max(200, e.width - 8)))
+
+        # list and editor share a draggable divider
+        split = ttk.PanedWindow(tab, orient="vertical")
+        split.pack(fill="both", expand=True)
+        top = ttk.Frame(split)
+        split.add(top, weight=1)
+
+        # buttons: a 3 x 2 grid that stretches with the panel, so the labels
+        # are never cut off
+        bf = ttk.Frame(top)
+        bf.pack(fill="x", padx=6, pady=(2, 4))
+        buttons = (("Add layer", self.add_layer),
+                   ("Duplicate", self.duplicate_layer),
+                   ("Delete", self.delete_layer),
+                   ("Move up ↑", lambda: self.move_layer(-1)),
+                   ("Move down ↓", lambda: self.move_layer(1)),
+                   ("Literature values…", self.show_placeholders))
+        for k, (text, cmd) in enumerate(buttons):
+            b = ttk.Button(bf, text=text, command=cmd)
+            b.grid(row=k // 3, column=k % 3, sticky="ew", padx=1, pady=1)
+            if text.startswith("Literature"):
+                Tooltip(b, "List every value that is still a literature "
+                           "pre-fill, for all layers. Double-click a layer to "
+                           "list only its values.")
+        for c in range(3):
+            bf.columnconfigure(c, weight=1, uniform="btn")
+
+        tf = ttk.Frame(top)
+        tf.pack(fill="both", expand=True, padx=6)
         cols = ("n", "mat", "d", "nk", "lit")
         self.tree = ttk.Treeview(tf, columns=cols, show="headings", height=7,
                                  selectmode="browse")
         for c, h, w in zip(cols, ("#", "Material", "Thickness", "n,k source",
-                                  "Literature values"), (34, 110, 110, 150, 150)):
+                                  "Literature values"), (34, 110, 110, 160, 120)):
             self.tree.heading(c, text=h)
-            self.tree.column(c, width=w, anchor="w", stretch=c == "nk")
-        self.tree.pack(side="left", fill="x", expand=True)
+            self.tree.column(c, width=w, minwidth=30, anchor="w", stretch=c != "n")
+        ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
+        xsb = ttk.Scrollbar(tf, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        ysb.grid(row=0, column=1, sticky="ns")
+        xsb.grid(row=1, column=0, sticky="ew")
+        tf.rowconfigure(0, weight=1)
+        tf.columnconfigure(0, weight=1)
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
-        bf = ttk.Frame(tf)
-        bf.pack(side="left", fill="y", padx=(6, 0))
-        for text, cmd in (("Add layer", self.add_layer),
-                          ("Duplicate", self.duplicate_layer),
-                          ("Delete", self.delete_layer),
-                          ("Up ↑", lambda: self.move_layer(-1)),
-                          ("Down ↓", lambda: self.move_layer(1))):
-            ttk.Button(bf, text=text, command=cmd, width=14).pack(pady=1)
-        b = ttk.Button(bf, text="Literature values…", width=14,
-                       command=self.show_placeholders)
-        b.pack(pady=(6, 1))
-        Tooltip(b, "List every value that is still a literature pre-fill, "
-                   "for all layers. Double-click a layer to list only its "
-                   "values.")
         self.tree.bind("<Double-1>", self._on_tree_double)
 
-        self.editor = ScrollableFrame(tab)
-        self.editor.pack(fill="both", expand=True, pady=(6, 0))
+        self.editor = ScrollableFrame(split)
+        split.add(self.editor, weight=3)
         self._build_layer_editor(self.editor.inner)
 
     def _layer_var(self, key):
@@ -1145,10 +1377,10 @@ class App(tk.Tk):
         tab = sf.inner
         ttk.Label(tab, wraplength=560, justify="left", foreground=INK2,
                   text="Vary the thickness of one layer, run the model for each "
-                       "value with everything else unchanged, overlay the ΔR/R "
-                       "curves, and (optionally) save one reflectivity file "
-                       "per thickness.").grid(row=0, column=0, sticky="w",
-                                               padx=8, pady=(6, 2))
+                       "value with everything else unchanged, and overlay the "
+                       "ΔR/R curves. What is saved, and under which names, is "
+                       "set in the Output tab.").grid(row=0, column=0, sticky="w",
+                                                      padx=8, pady=(6, 2))
         g = section(tab, "Thickness range", 1)
         ttk.Label(g, text="Layer").grid(row=0, column=0, sticky="w")
         self.sweep_layer = tk.StringVar()
@@ -1174,69 +1406,201 @@ class App(tk.Tk):
         self.sweep_preview.grid(row=3, column=0, columnspan=5, sticky="w",
                                 pady=(4, 0))
 
-        o = section(tab, "Output files", 2)
-        self.sweep_save = tk.BooleanVar(value=False)
-        ttk.Checkbutton(o, text="Save each run's reflectivity file "
-                               "(.csv + .npz) automatically",
-                        variable=self.sweep_save).grid(
-            row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(o, text="Folder").grid(row=1, column=0, sticky="w")
-        self.sweep_dir = tk.StringVar(value=os.getcwd())
-        ttk.Entry(o, textvariable=self.sweep_dir, width=42).grid(
-            row=1, column=1, sticky="ew", padx=2, pady=2)
-        ttk.Button(o, text="Browse…", command=self._browse_sweep_dir).grid(
-            row=1, column=2, padx=2)
-        lab = ttk.Label(o, text="File name")
-        lab.grid(row=2, column=0, sticky="w")
-        self.sweep_name = tk.StringVar(value="dRR_{material}_{d}{unit}")
-        ttk.Entry(o, textvariable=self.sweep_name, width=42).grid(
-            row=2, column=1, sticky="ew", padx=2, pady=2)
-        tip = ("Fields you can use in the names:\n"
-               "  {material}  name of the swept layer\n"
-               "  {layer}     its number in the stack\n"
-               "  {d}         thickness, in the unit chosen above\n"
-               "  {unit}      that unit (nm, um, A, m)\n"
-               "  {i}         run number 1, 2, 3 …\n"
-               "  {n}         number of runs\n"
-               ".csv and .npz are added automatically.")
-        Tooltip(lab, tip)
-        self.sweep_combined = tk.BooleanVar(value=False)
-        ttk.Checkbutton(o, text="Also save all thicknesses in one combined file:",
-                        variable=self.sweep_combined).grid(
-            row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        ttk.Label(o, text="Combined").grid(row=4, column=0, sticky="w")
-        self.sweep_cname = tk.StringVar(value="dRR_{material}_sweep_{start}-{end}{unit}")
-        ttk.Entry(o, textvariable=self.sweep_cname, width=42).grid(
-            row=4, column=1, sticky="ew", padx=2, pady=2)
-        ttk.Label(o, foreground=INK2, justify="left", text=tip.replace(
-            "\n  {i}         run number 1, 2, 3 …", "").replace(
-            "  {d}         thickness, in the unit chosen above\n",
-            "  {d}         thickness (per-run files)\n"
-            "  {start} {end} {step}  the range (combined file)\n")).grid(
-            row=5, column=0, columnspan=3, sticky="w", pady=(4, 0))
-        self.name_preview = ttk.Label(o, foreground=INK2, wraplength=520,
-                                      justify="left")
-        self.name_preview.grid(row=6, column=0, columnspan=3, sticky="w",
-                               pady=(4, 0))
-        o.columnconfigure(1, weight=1)
+        o = section(tab, "What this sweep will produce", 2)
+        self.sweep_summary = ttk.Label(o, foreground=INK2, wraplength=520,
+                                       justify="left")
+        self.sweep_summary.grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Button(o, text="Output settings…",
+                   command=lambda: self.tabs.select(self.output_tab)).grid(
+            row=1, column=0, sticky="w", pady=(6, 0))
 
         ttk.Button(tab, text="▶ Run sweep", command=self.run_sweep).grid(
             row=3, column=0, sticky="w", padx=8, pady=10)
         for v in (self.sweep_layer, self.sweep_start, self.sweep_end,
-                  self.sweep_step, self.sweep_unit, self.sweep_save,
-                  self.sweep_dir, self.sweep_name, self.sweep_combined,
-                  self.sweep_cname):
-            v.trace_add("write", lambda *_: self._update_sweep_preview())
+                  self.sweep_step, self.sweep_unit):
+            v.trace_add("write", lambda *_: self.schedule_preview())
 
-    def _browse_sweep_dir(self):
-        d = filedialog.askdirectory(title="Folder for the sweep files",
-                                    initialdir=self.sweep_dir.get() or None)
+    # ---------------------------------------------------------------- output
+    def _build_output_tab(self):
+        sf = ScrollableFrame(self.tabs)
+        self.tabs.add(sf, text="Output")
+        self.output_tab = sf
+        tab = sf.inner
+        self.out = {}
+        for k, v in O.default_options().items():
+            self.out[k] = (tk.BooleanVar(value=v) if isinstance(v, bool)
+                           else tk.StringVar(value=v))
+            self.out[k].trace_add("write", lambda *_: self.schedule_preview())
+        ov = self.out
+
+        w = section(tab, "Where", 0)
+        ttk.Label(w, text="Folder").grid(row=0, column=0, sticky="w")
+        ttk.Entry(w, textvariable=ov["folder"], width=44).grid(
+            row=0, column=1, sticky="ew", padx=2, pady=2)
+        ttk.Button(w, text="Browse…", command=self._browse_out_dir).grid(
+            row=0, column=2, padx=2)
+        w.columnconfigure(1, weight=1)
+
+        n = section(tab, "When to save automatically, and file names", 1)
+        rows = (("auto_single", "single_name", "After every single run (F5)",
+                 O.RUN_FIELDS),
+                ("auto_sweep", "sweep_name", "After every run of a sweep",
+                 O.SWEEP_FIELDS),
+                ("combined", "combined_name", "One combined file per sweep "
+                 "(all thicknesses side by side)", O.COMBINED_FIELDS))
+        for r, (flag, name, text, fields) in enumerate(rows):
+            ttk.Checkbutton(n, text=text, variable=ov[flag]).grid(
+                row=3 * r, column=0, columnspan=2, sticky="w", pady=(6 if r else 0, 0))
+            ttk.Label(n, text="name").grid(row=3 * r + 1, column=0, sticky="e",
+                                           padx=(18, 4))
+            ttk.Entry(n, textvariable=ov[name], width=44).grid(
+                row=3 * r + 1, column=1, sticky="ew", pady=1)
+            ttk.Label(n, foreground=INK2, wraplength=440, text="fields: " +
+                      " ".join("{%s}" % f for f in fields)).grid(
+                row=3 * r + 2, column=1, sticky="w")
+        n.columnconfigure(1, weight=1)
+        ttk.Label(n, foreground=INK2, justify="left", wraplength=480, text=(
+            "{run} run/sweep number · {date} YYYYMMDD · {time} HHMMSS · "
+            "{material} swept layer · {layer} its position · {d} thickness · "
+            "{unit} thickness unit · {i} run within the sweep · {n} number of "
+            "runs · {start} {end} {step} the range. The extensions are added "
+            "automatically.")).grid(row=9, column=0, columnspan=2, sticky="w",
+                                    pady=(6, 0))
+
+        c = section(tab, "What to save", 2)
+        ttk.Checkbutton(c, text="CSV table (opens in Excel, Origin, …)",
+                        variable=ov["csv"]).grid(row=0, column=0, columnspan=4,
+                                                 sticky="w")
+        cf = ttk.Frame(c)
+        cf.grid(row=1, column=0, columnspan=4, sticky="w", padx=(18, 0))
+        ttk.Label(cf, text="columns: time, total ΔR/R, plus").grid(
+            row=0, column=0, columnspan=4, sticky="w")
+        for k, (opt, lab) in enumerate((("comp_strain", "strain"),
+                                        ("comp_disp", "displacement"),
+                                        ("comp_lattice", "lattice T"),
+                                        ("comp_electron", "electron T"))):
+            ttk.Checkbutton(cf, text=lab, variable=ov[opt]).grid(
+                row=1, column=k, sticky="w", padx=(0, 8))
+        ff = ttk.Frame(c)
+        ff.grid(row=2, column=0, columnspan=4, sticky="w", padx=(18, 0), pady=2)
+        ttk.Label(ff, text="time unit").pack(side="left")
+        ttk.Combobox(ff, textvariable=ov["csv_time_unit"], width=4,
+                     state="readonly", values=list(O.TIME_UNITS)).pack(
+            side="left", padx=(2, 10))
+        ttk.Label(ff, text="separator").pack(side="left")
+        ttk.Combobox(ff, textvariable=ov["csv_delimiter"], width=9,
+                     state="readonly", values=list(O.DELIMITERS)).pack(
+            side="left", padx=(2, 10))
+        ttk.Label(ff, text="number format").pack(side="left")
+        ttk.Entry(ff, textvariable=ov["csv_format"], width=7).pack(
+            side="left", padx=(2, 10))
+        ttk.Checkbutton(ff, text="header row", variable=ov["csv_header"]).pack(
+            side="left")
+        ttk.Checkbutton(c, text="NPZ archive (all arrays + metadata, for Python)",
+                        variable=ov["npz"]).grid(row=3, column=0, columnspan=4,
+                                                 sticky="w", pady=(6, 0))
+        nf = ttk.Frame(c)
+        nf.grid(row=4, column=0, columnspan=4, sticky="w", padx=(18, 0))
+        ttk.Checkbutton(nf, text="depth profiles (kernels, absorption)",
+                        variable=ov["npz_profiles"]).pack(side="left")
+        ttk.Checkbutton(nf, text="strain map η(z,t), if recorded",
+                        variable=ov["npz_strain"]).pack(side="left", padx=8)
+        ttk.Checkbutton(c, text="Metadata JSON (inputs with units, converted "
+                                "values, placeholders, run time)",
+                        variable=ov["meta_json"]).grid(
+            row=5, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Checkbutton(c, text="Figures", variable=ov["figures"]).grid(
+            row=6, column=0, sticky="w", pady=(6, 0))
+        gf = ttk.Frame(c)
+        gf.grid(row=7, column=0, columnspan=4, sticky="w", padx=(18, 0))
+        ttk.Checkbutton(gf, text="ΔR/R", variable=ov["fig_drr"]).pack(side="left")
+        ttk.Checkbutton(gf, text="stack diagram", variable=ov["fig_stack"]).pack(
+            side="left", padx=6)
+        ttk.Checkbutton(gf, text="extra plots that are shown",
+                        variable=ov["fig_extra"]).pack(side="left", padx=6)
+        gf2 = ttk.Frame(c)
+        gf2.grid(row=8, column=0, columnspan=4, sticky="w", padx=(18, 0), pady=2)
+        ttk.Label(gf2, text="format").pack(side="left")
+        ttk.Combobox(gf2, textvariable=ov["fig_format"], width=5,
+                     state="readonly", values=O.FIG_FORMATS).pack(
+            side="left", padx=(2, 10))
+        ttk.Label(gf2, text="dpi").pack(side="left")
+        ttk.Entry(gf2, textvariable=ov["fig_dpi"], width=5).pack(side="left",
+                                                                 padx=2)
+        ttk.Label(c, foreground=INK2, wraplength=520, justify="left", text=(
+            "Figures are saved as they look on screen, with your labels and "
+            "colours. For a sweep, the ΔR/R figure holds all thicknesses and "
+            "takes the combined-file name. File → Export uses these same "
+            "choices.")).grid(row=9, column=0, columnspan=4, sticky="w",
+                              pady=(4, 0))
+
+        pv = section(tab, "Preview", 3)
+        self.out_preview = ttk.Label(pv, foreground=INK2, wraplength=540,
+                                     justify="left")
+        self.out_preview.grid(row=0, column=0, sticky="w")
+        self._preview_job = None
+
+    def _browse_out_dir(self):
+        d = filedialog.askdirectory(title="Folder for the output files",
+                                    initialdir=self.out["folder"].get() or None)
         if d:
-            self.sweep_dir.set(os.path.normpath(d))
+            self.out["folder"].set(os.path.normpath(d))
+
+    def _opts(self):
+        return {k: v.get() for k, v in self.out.items()}
+
+    # --- planning: names, file counts, sizes, time
+    def _dims(self, layers):
+        """(cfg, d_stack_nm, v_max) from the current inputs, or None."""
+        try:
+            cfg, _ = S.resolve_config(self._cfg_entries(), self._flags())
+        except S.InputError:
+            return None
+        d = sum(S.parse_thickness(l) or 0.0 for l in layers[:-1])
+        vs = []
+        for l in layers:
+            try:
+                vs.append(U.to_base(float(l["v"]), "velocity", l["v_unit"]))
+            except (ValueError, KeyError):
+                pass
+        return cfg, d, (max(vs) if vs else None)
+
+    def _time_estimate(self, works):
+        if not self.work_rate or not works:
+            return "unknown until the first run has been timed"
+        return f"≈ {fmt_duration(self.work_rate * sum(works))} (from the last run's speed)"
+
+    def _single_plan(self):
+        """Names and estimates for the next single run."""
+        opts = self._opts()
+        O.check_options(opts)
+        base = None
+        if opts["auto_single"]:
+            if not opts["folder"].strip():
+                raise ValueError("Choose an output folder.")
+            base = os.path.join(opts["folder"], S.format_name(
+                opts["single_name"], run=self.run_counter + 1, **O.stamp()))
+        dims = self._dims(self.layers)
+        nbytes, works, nfig = 0, [], 0
+        if dims:
+            cfg, d, vmax = dims
+            N, nt = O.grid_size(cfg, d)
+            if base:
+                nbytes = O.estimate_run_bytes(opts, N, nt, self.show_strain.get())
+                if opts["figures"]:
+                    nfig = (opts["fig_drr"] + opts["fig_stack"] + (
+                        opts["fig_extra"] * sum(v.get() for v in (
+                            self.show_components, self.show_kernels,
+                            self.show_strain))))
+                    nbytes += O.figure_bytes(opts, nfig)
+            if vmax:
+                works = [O.run_work(cfg, d, vmax)]
+        nfiles = (len(O.run_files(opts)) + nfig) if base else 0
+        return dict(base=base, nfiles=nfiles, nbytes=nbytes, works=works,
+                    nfig=nfig)
 
     def _sweep_plan(self):
-        """(layer index, values, unit, per-run base paths or None,
-        combined base path or None); raises ValueError with a message."""
+        """Everything about the next sweep; raises ValueError with a message."""
         sl = self.sweep_layer.get()
         if not sl:
             raise ValueError("Add at least one layer above the substrate to "
@@ -1251,54 +1615,129 @@ class App(tk.Tk):
         if vals[0] <= 0:
             raise ValueError("Thicknesses must be > 0.")
         unit = self.sweep_unit.get()
-        uname = FILE_UNIT_NAMES.get(unit, unit)
+        uname = S.FILE_UNIT_NAMES.get(unit, unit)
         mat = self.layers[idx]["material"].strip() or f"layer{idx + 1}"
-        bases = cbase = None
-        folder = self.sweep_dir.get().strip()
-        if self.sweep_save.get() or self.sweep_combined.get():
+        opts = self._opts()
+        O.check_options(opts)
+        folder = opts["folder"].strip()
+        common = dict(run=self.run_counter + 1, material=mat, layer=idx + 1,
+                      unit=uname, n=len(vals), **O.stamp())
+        bases = None
+        if opts["auto_sweep"] or opts["combined"] or opts["figures"]:
             if not folder:
-                raise ValueError("Choose a folder for the output files.")
-        if self.sweep_save.get():
+                raise ValueError("Choose an output folder in the Output tab.")
+        if opts["auto_sweep"]:
             bases = [os.path.join(folder, S.format_name(
-                self.sweep_name.get(), material=mat, layer=idx + 1, d=f"{v:g}",
-                unit=uname, i=i + 1, n=len(vals))) for i, v in enumerate(vals)]
+                opts["sweep_name"], d=f"{v:g}", i=i + 1, **common))
+                for i, v in enumerate(vals)]
             if len(set(bases)) != len(bases):
-                raise ValueError("The file name gives the same name to several "
-                                 "runs; include {d} or {i}.")
-        if self.sweep_combined.get():
-            try:
-                cbase = os.path.join(folder, self.sweep_cname.get().format(
-                    material=mat, layer=idx + 1, unit=uname, n=len(vals),
-                    start=f"{a:g}", end=f"{vals[-1]:g}", step=f"{st:g}"))
-            except (KeyError, IndexError, ValueError) as e:
-                raise ValueError(f"Combined file name: unknown field {e}; use "
-                                 f"{{material}} {{layer}} {{start}} {{end}} "
-                                 f"{{step}} {{unit}} {{n}}")
-            cbase = os.path.join(folder, S.format_name(os.path.basename(cbase)))
-        return idx, vals, unit, bases, cbase
-
-    def _update_sweep_preview(self):
-        try:
-            idx, vals, unit, bases, cbase = self._sweep_plan()
-        except ValueError as e:
-            self.sweep_preview.config(text=str(e), foreground="#c00000")
-            self.name_preview.config(text="")
-            return
-        shown = ", ".join(f"{v:g}" for v in vals[:8]) + (
-            f", … {vals[-1]:g}" if len(vals) > 8 else "")
-        self.sweep_preview.config(
-            text=f"{len(vals)} runs: {shown} {unit}", foreground=INK2)
-        lines = []
-        if bases:
-            names = [os.path.basename(b) + ".csv" for b in bases]
-            lines.append("Files: " + (", ".join(names) if len(names) <= 3 else
-                                      f"{names[0]}, {names[1]}, … {names[-1]}"))
+                raise ValueError("The per-run file name gives the same name to "
+                                 "several runs; include {d} or {i}.")
+        cname = os.path.join(folder, S.format_name(
+            opts["combined_name"], start=f"{a:g}", end=f"{vals[-1]:g}",
+            step=f"{st:g}", **common))
+        cbase = cname if opts["combined"] else None
+        figbase = cname if opts["figures"] else None
+        # sizes and work, thickness by thickness
+        nbytes, works = 0, []
+        dims = self._dims(self.layers)
+        if dims:
+            cfg, d0, vmax = dims
+            d_others = d0 - (S.parse_thickness(self.layers[idx]) or 0.0)
+            for v in vals:
+                d = d_others + U.to_base(v, "thickness", unit)
+                N, nt = O.grid_size(cfg, d)
+                if bases:
+                    nbytes += O.estimate_run_bytes(opts, N, nt,
+                                                   self.show_strain.get())
+                if vmax:
+                    works.append(O.run_work(cfg, d, vmax))
+            if cbase:
+                nbytes += O.estimate_combined_bytes(opts, nt, len(vals))
+        nfig = (opts["fig_drr"] + opts["fig_stack"]) if figbase else 0
+        nbytes += O.figure_bytes(opts, nfig)
+        per_run = len(O.run_files(opts)) if bases else 0
+        n_comb = 0
         if cbase:
-            lines.append(f"Combined: {os.path.basename(cbase)}.csv")
-        if not lines:
-            lines.append("No files are written automatically (you can still "
-                         "use File → Export sweep afterwards).")
-        self.name_preview.config(text="\n".join(lines))
+            n_comb = (opts["csv"] or not opts["npz"]) + opts["npz"]
+        return dict(idx=idx, vals=vals, unit=unit, bases=bases, cbase=cbase,
+                    figbase=figbase, folder=folder, per_run=per_run,
+                    n_comb=n_comb, nfig=nfig,
+                    nfiles=per_run * len(vals) + n_comb + nfig,
+                    nbytes=nbytes, works=works)
+
+    def _describe_sweep(self, p):
+        lines = [f"{len(p['vals'])} simulations of layer {p['idx'] + 1} "
+                 f"({self.layers[p['idx']]['material']}): "
+                 f"{p['vals'][0]:g} … {p['vals'][-1]:g} {p['unit']}"]
+        if p["nfiles"]:
+            parts = []
+            if p["per_run"]:
+                parts.append(f"{len(p['vals'])} × {p['per_run']} per-run "
+                             f"({', '.join(O.run_files(self._opts()))})")
+            if p["n_comb"]:
+                parts.append(f"{p['n_comb']} combined")
+            if p["nfig"]:
+                parts.append(f"{p['nfig']} figure(s)")
+            lines.append(f"Files: {p['nfiles']} = " + " + ".join(parts))
+            lines.append(f"Estimated size: ≈ {O.human_size(p['nbytes'])} in "
+                         f"{p['folder']}")
+            names = []
+            if p["bases"]:
+                b = [os.path.basename(x) for x in p["bases"]]
+                names.append("e.g. " + (", ".join(b) if len(b) <= 2 else
+                                        f"{b[0]}, … {b[-1]}"))
+            if p["cbase"] or p["figbase"]:
+                names.append("combined/figure: " +
+                             os.path.basename(p["cbase"] or p["figbase"]))
+            if names:
+                lines.append("Names: " + "; ".join(names))
+        else:
+            lines.append("Files: none are saved automatically (switch saving "
+                         "on in the Output tab, or use File → Export later).")
+        lines.append("Estimated time: " + self._time_estimate(p["works"]))
+        return "\n".join(lines)
+
+    def schedule_preview(self):
+        if getattr(self, "_preview_job", None):
+            self.after_cancel(self._preview_job)
+        self._preview_job = self.after(300, self._update_previews)
+
+    def _update_previews(self):
+        self._preview_job = None
+        if not hasattr(self, "sweep_summary") or not hasattr(self, "out_preview"):
+            return
+        # sweep tab
+        try:
+            p = self._sweep_plan()
+            shown = ", ".join(f"{v:g}" for v in p["vals"][:8]) + (
+                f", … {p['vals'][-1]:g}" if len(p["vals"]) > 8 else "")
+            self.sweep_preview.config(text=f"{len(p['vals'])} runs: {shown} "
+                                           f"{p['unit']}", foreground=INK2)
+            sweep_txt = self._describe_sweep(p)
+            self.sweep_summary.config(text=sweep_txt, foreground=INK2)
+        except ValueError as e:
+            p = None
+            self.sweep_preview.config(text=str(e), foreground="#c00000")
+            self.sweep_summary.config(text="", foreground=INK2)
+            sweep_txt = f"Sweep: {e}"
+        # output tab
+        try:
+            sp = self._single_plan()
+            if sp["base"]:
+                single = (f"Next single run → {os.path.basename(sp['base'])}"
+                          f" ({', '.join(O.run_files(self._opts()))}"
+                          f"{', + %d figure(s)' % sp['nfig'] if sp['nfig'] else ''})"
+                          f", {sp['nfiles']} file(s), ≈ "
+                          f"{O.human_size(sp['nbytes'])}")
+            else:
+                single = ("Single runs are not saved automatically (File → "
+                          "Export selected run saves one by hand).")
+            col = INK2
+        except ValueError as e:
+            single, col = str(e), "#c00000"
+        self.out_preview.config(text=single + "\n\nThickness sweep:\n" + sweep_txt,
+                                foreground=col)
 
     def _refresh_sweep_layers(self):
         vals = [f"{i + 1}: {l['material']}" for i, l in enumerate(self.layers[:-1])]
@@ -1306,7 +1745,7 @@ class App(tk.Tk):
         self.sweep_cb.config(values=vals)
         if cur not in vals:
             self.sweep_layer.set(vals[0] if vals else "")
-        self._update_sweep_preview()
+        self.schedule_preview()
 
     # --------------------------------------------------------------- run bar
     def _build_run_bar(self, parent):
@@ -1317,7 +1756,7 @@ class App(tk.Tk):
         self.cancel_btn = ttk.Button(f, text="Cancel", command=self.cancel,
                                      state="disabled")
         self.cancel_btn.pack(side="left", padx=4)
-        self.pbar = ttk.Progressbar(f, length=180, maximum=1.0)
+        self.pbar = ttk.Progressbar(f, length=120, maximum=1.0)
         self.pbar.pack(side="left", padx=6)
         self.status = ttk.Label(f, text="ready", foreground=INK2)
         self.status.pack(side="left")
@@ -1349,7 +1788,7 @@ class App(tk.Tk):
         main = ttk.PanedWindow(self.ptabs, orient="vertical")
         self.ptabs.add(main, text="Stack & ΔR/R")
 
-        self.stack_panel = PlotPanel(main, figsize=(8, 1.9))
+        self.stack_panel = PlotPanel(main, figsize=(8, 1.9), colors=False)
         self.stack_panel.redraw = self.draw_stack
         main.add(self.stack_panel, weight=1)
         ttk.Label(self.stack_panel.controls, text="Widths").pack(side="left")
@@ -1410,6 +1849,7 @@ class App(tk.Tk):
 
     def draw_stack(self):
         self._stack_job = None
+        self.schedule_preview()          # file sizes depend on the thicknesses
         p = self.stack_panel
         if not self.layers:
             p.empty("No layers. Use 'Add layer' in the Layers tab.")
@@ -1538,7 +1978,7 @@ class App(tk.Tk):
                     label=r["label"])
         tmax = max(r["res"]["t_ps"].max() for r in runs)
         ax.set_xlim(0, tmax)
-        ax.axhline(0, color=GRID_C, lw=.8, zorder=0)
+        ax.axhline(0, color=GRID_C, lw=.8, zorder=0, gid="ref")
         ax.set_xlabel("delay (ps)")
         ax.set_ylabel(drr_label(exp))
         ax.set_title("Modelled differential reflectivity"
@@ -1563,7 +2003,7 @@ class App(tk.Tk):
             ax.plot(res["t_ps"], res[k] * 10 ** exp, color=c, lw=1.2, label=lab)
         zoom = min(60.0, res["t_ps"].max())
         ax.set_xlim(0, zoom)
-        ax.axhline(0, color=GRID_C, lw=.8, zorder=0)
+        ax.axhline(0, color=GRID_C, lw=.8, zorder=0, gid="ref")
         ax.set_xlabel("delay (ps)")
         ax.set_ylabel(drr_label(exp))
         ax.set_title(f"Components of ΔR/R — {self.view_run.get()} "
@@ -1592,7 +2032,7 @@ class App(tk.Tk):
         ax[1].set_title(f"Pump absorption — transducer: {res['transducer']}")
         for a in ax:
             for e in res["grid"]["edges"][1:]:
-                a.axvline(e / M.nm, color=INK2, lw=.7, ls="--")
+                a.axvline(e / M.nm, color=INK2, lw=.7, ls="--", gid="ref")
             a.set_xlim(0, zmax)
             a.set_xlabel("depth z (nm)")
             a.grid(alpha=.6)
@@ -1615,14 +2055,16 @@ class App(tk.Tk):
                        vmin=-vmax, vmax=vmax, interpolation="nearest",
                        extent=[t[0], t[-1], z[-1], z[0]])
         for e in res["grid"]["edges"][1:]:
-            ax.axhline(e / M.nm, color=INK2, lw=.6, ls="--")
-        ax.axhline(res["grid"]["z_sponge"] / M.nm, color=INK, lw=.8, ls=":")
+            ax.axhline(e / M.nm, color=INK2, lw=.6, ls="--", gid="ref")
+        ax.axhline(res["grid"]["z_sponge"] / M.nm, color=INK, lw=.8, ls=":",
+                   gid="ref")
         ax.set_xlabel("delay (ps)")
         ax.set_ylabel("depth z (nm)")
         ax.set_title(f"Strain η(z, t) — {self.view_run.get()}  "
                      f"(dotted line: start of the absorbing sponge)")
         cb = fig.colorbar(im, ax=ax)
         cb.ax._diffr_cbar = True
+        p.colorbars.append(cb)
         cb.set_label("strain η")
         p.finish()
 
@@ -1693,39 +2135,63 @@ class App(tk.Tk):
         return dict(config=self._cfg_entries(), flags=self._flags(),
                     layers=copy.deepcopy(layers))
 
+    def _existing(self, bases, suffixes):
+        return [b + x for b in bases for x in suffixes if os.path.exists(b + x)]
+
     def run_single(self):
         if self._busy():
+            return
+        try:
+            plan = self._single_plan()
+        except ValueError as e:
+            messagebox.showerror("Output settings", str(e))
             return
         prep = self._prepare(self.layers)
         if prep is None:
             return
         cfg, stack, mats = prep
+        base = plan["base"]
+        if base:
+            sfx = O.run_files(self._opts()) + [
+                f"_{k}.{self.out['fig_format'].get()}" for k in FIGURE_PANELS]
+            ex = self._existing([base], sfx)
+            if ex and not messagebox.askyesno(
+                    "Overwrite?", f"{ex[0]}\nalready exists. Overwrite?"):
+                return
         self.run_counter += 1
         label = f"run {self.run_counter}"
-        self.log(f"— {label}: started", "head")
+        self.log(f"— {label}: started; estimated time: "
+                 f"{self._time_estimate(plan['works'])}", "head")
+        if base:
+            self.log(f"   will save {plan['nfiles']} file(s), ≈ "
+                     f"{O.human_size(plan['nbytes'])}: {base}*")
         self._start([dict(label=label, cfg=cfg, stack=stack, materials=mats,
-                          inputs=self._snapshot(self.layers))],
-                    dict(kind="single", info=""))
+                          inputs=self._snapshot(self.layers), save_base=base)],
+                    dict(kind="single", info="", figbase=base
+                         if self.out["figures"].get() else None))
 
     def run_sweep(self):
         if self._busy():
             return
         try:
-            idx, vals, unit, bases, cbase = self._sweep_plan()
+            p = self._sweep_plan()
         except ValueError as e:
             messagebox.showerror("Sweep", str(e))
             return
-        if len(vals) > 50 and not messagebox.askyesno(
-                "Sweep", f"This starts {len(vals)} simulations. Continue?"):
+        idx, vals, unit, bases = p["idx"], p["vals"], p["unit"], p["bases"]
+        # tell the user what is about to happen before anything runs
+        if not messagebox.askokcancel("Start sweep?", self._describe_sweep(p)):
             return
-        existing = [p for b in (bases or []) + ([cbase] if cbase else [])
-                    for p in (b + ".csv", b + ".npz") if os.path.exists(p)]
-        if existing and not messagebox.askyesno(
-                "Sweep", f"{len(existing)} output file(s) already exist, e.g.\n"
-                         f"{existing[0]}\n\nOverwrite them?"):
+        fmt = self.out["fig_format"].get()
+        ex = self._existing(bases or [], O.run_files(self._opts()))
+        if p["cbase"]:
+            ex += self._existing([p["cbase"]], [".csv", ".npz"])
+        if p["figbase"]:
+            ex += self._existing([p["figbase"]], [f"_dRR.{fmt}", f"_stack.{fmt}"])
+        if ex and not messagebox.askyesno(
+                "Sweep", f"{len(ex)} output file(s) already exist, e.g.\n"
+                         f"{ex[0]}\n\nOverwrite them?"):
             return
-        for b in (bases or []) + ([cbase] if cbase else []):
-            os.makedirs(os.path.dirname(b) or ".", exist_ok=True)
         name = self.layers[idx]["material"]
         jobs = []
         self.run_counter += 1
@@ -1743,11 +2209,10 @@ class App(tk.Tk):
                              sweep_value=v, sweep_unit=unit,
                              sweep_nm=U.to_base(v, "thickness", unit),
                              save_base=bases[j] if bases else None))
-        self.log(f"— {tag}: layer {idx + 1} ({name}) at {len(vals)} thicknesses: "
-                 f"{vals[0]:g} … {vals[-1]:g} {unit}", "head")
-        if bases or cbase:
-            self.log(f"   output folder: {os.path.dirname((bases or [cbase])[0])}")
-        self._start(jobs, dict(kind="sweep", combined=cbase,
+        self.log(f"— {tag}: started", "head")
+        self.log("   " + self._describe_sweep(p).replace("\n", "\n   "))
+        self._start(jobs, dict(kind="sweep", combined=p["cbase"],
+                               figbase=p["figbase"],
                                info=f"layer {idx + 1} ({name}) thickness"))
 
     def _busy(self):
@@ -1762,7 +2227,8 @@ class App(tk.Tk):
         self.run_btn.config(state="disabled")
         self.cancel_btn.config(state="normal")
         self.pbar["value"] = 0
-        self._pending = dict(batch, runs=[], n_jobs=len(jobs))
+        self._pending = dict(batch, runs=[], n_jobs=len(jobs),
+                             opts=self._opts(), t0=time.perf_counter())
         self.worker = threading.Thread(target=self._work, args=(jobs,), daemon=True)
         self.worker.start()
 
@@ -1772,6 +2238,7 @@ class App(tk.Tk):
         for j, job in enumerate(jobs):
             def prog(f, j=j, lab=job["label"]):
                 self.queue.put(("progress", (j + f) / n, lab))
+            t0 = time.perf_counter()
             try:
                 res = M.run_model(job["stack"], job["materials"], job["cfg"],
                                   verbose=False, progress=prog,
@@ -1782,6 +2249,7 @@ class App(tk.Tk):
             except Exception:
                 self.queue.put(("error", traceback.format_exc(), job["label"]))
                 return
+            job["elapsed"] = time.perf_counter() - t0
             self.queue.put(("one", job, res))
         self.queue.put(("done", None, None))
 
@@ -1791,14 +2259,19 @@ class App(tk.Tk):
                 kind, a, b = self.queue.get_nowait()
                 if kind == "progress":
                     self.pbar["value"] = a
-                    self.status.config(text=f"{b}: {100 * a:.0f} %")
+                    el = time.perf_counter() - self._pending["t0"]
+                    self.status.config(text=f"{b}: {100 * a:.0f} %  "
+                                            f"({fmt_duration(el)} elapsed)")
                 elif kind == "one":
                     a["res"] = b
                     self._pending["runs"].append(a)
-                    self.log(f"{a['label']} finished")
+                    work = len(b["t_ps"]) * b["grid"]["N"] * b["n_sub"]
+                    self.work_rate = a["elapsed"] / work
+                    self.log(f"{a['label']} finished in "
+                             f"{fmt_duration(a['elapsed'])}")
                     self.log(M.run_summary(b))
                     if a.get("save_base"):
-                        self._save_run(a, a["save_base"])
+                        self._save_run(a, a["save_base"], self._pending["opts"])
                 elif kind in ("done", "cancelled", "error"):
                     self._finish(kind, a, b)
         except queue.Empty:
@@ -1809,6 +2282,8 @@ class App(tk.Tk):
         self.run_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
         batch = self._pending
+        total = time.perf_counter() - batch["t0"]
+        batch["elapsed"] = total
         if kind == "error":
             self.log(f"{b} failed:\n{a}", "err")
             messagebox.showerror("Model error", a.strip().splitlines()[-1])
@@ -1817,7 +2292,9 @@ class App(tk.Tk):
                      f"{batch['n_jobs']} runs", "warn")
         if batch["runs"] and batch.get("combined"):
             try:
-                self._write_sweep(batch, batch["combined"])
+                files = O.write_sweep(batch["runs"], batch["combined"],
+                                      batch["opts"], batch["info"])
+                self.log("written: " + ", ".join(files))
             except Exception as e:
                 self.log(f"could not write the combined file: "
                          f"{type(e).__name__}: {e}", "err")
@@ -1826,9 +2303,20 @@ class App(tk.Tk):
             self._refresh_run_list()
             self.draw_drr()
             self.redraw_run_plots()
+            if batch.get("figbase"):
+                self._save_figures(batch["figbase"], batch["opts"],
+                                   extra=batch["kind"] == "single")
+        n = len(batch["runs"])
+        if batch["kind"] == "sweep" and n:
+            msg = (f"{n} run{'s' if n > 1 else ''} in {fmt_duration(total)} "
+                   f"({fmt_duration(total / n)} per run)")
+        else:
+            msg = f"in {fmt_duration(total)}"
+        word = {"done": "done", "cancelled": "cancelled", "error": "stopped"}[kind]
+        self.log(f"{word}: {msg}", "head")
         self.pbar["value"] = 1.0 if kind == "done" else 0
-        self.status.config(text={"done": "done", "cancelled": "cancelled",
-                                 "error": "error"}[kind])
+        self.status.config(text=f"{word} — {msg}")
+        self.schedule_preview()          # time estimates now use this speed
 
     def cancel(self):
         if self.worker is not None and self.worker.is_alive():
@@ -1844,50 +2332,69 @@ class App(tk.Tk):
                     return b, r
         return None, None
 
-    def _save_run(self, run, base):
-        res = run["res"]
+    def _save_run(self, run, base, opts):
+        meta = O.run_meta(run["res"], run["label"], run["inputs"],
+                          run.get("elapsed"))
         try:
-            files = M.save_result(
-                res, base, save_strain_map=res.get("eta_zt") is not None,
-                extra_meta=dict(label=run["label"], gui_inputs=run["inputs"],
-                                materials_model_units=S.materials_as_json(
-                                    res["stack"], res["materials"])))
+            files = O.write_run(run["res"], base, opts, meta)
         except Exception as e:
             self.log(f"could not save {base}: {type(e).__name__}: {e}", "err")
             return False
         self.log("written: " + ", ".join(files))
         return True
 
-    def _write_sweep(self, b, base):
-        t = b["runs"][0]["res"]["t_ps"]
-        cols = lambda k: np.column_stack([r["res"][k] for r in b["runs"]])
-        d_nm = np.array([r["sweep_nm"] for r in b["runs"]])
-        header = "t_ps," + ",".join(f"dR_over_R_d={r['sweep_value']:g}"
-                                    f"{FILE_UNIT_NAMES.get(r['sweep_unit'], r['sweep_unit'])}"
-                                    for r in b["runs"])
-        np.savetxt(base + ".csv", np.column_stack([t, cols("drr")]), delimiter=",",
-                   header=header, comments="", fmt="%.8e", encoding="utf-8")
-        np.savez_compressed(
-            base + ".npz", t_ps=t, drr=cols("drr"), thickness_nm=d_nm,
-            drr_strain=cols("drr_strain"), drr_disp=cols("drr_disp"),
-            drr_lattice=cols("drr_lattice"), drr_electron=cols("drr_electron"),
-            labels=np.array([r["label"] for r in b["runs"]]),
-            meta=json.dumps(dict(swept=b["info"],
-                                 gui_inputs=b["runs"][0]["inputs"])))
-        self.log(f"written: {base}.csv, {base}.npz")
+    def _save_figures(self, base, opts, extra=True):
+        """Save the chosen figures as they are on screen."""
+        panels = []
+        if opts["fig_drr"]:
+            panels.append(("dRR", self.drr_panel))
+        if opts["fig_stack"]:
+            panels.append(("stack", self.stack_panel))
+        if opts["fig_extra"] and extra:
+            for var, key in ((self.show_components, "components"),
+                             (self.show_kernels, "kernels"),
+                             (self.show_strain, "strain_map")):
+                if var.get():
+                    panels.append((key, FIGURE_PANELS_MAP(self)[key]))
+        try:
+            dpi = int(opts["fig_dpi"])
+        except ValueError:
+            dpi = 150
+        written = []
+        for key, panel in panels:
+            path = f"{base}_{key}.{opts['fig_format']}"
+            try:
+                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                panel.fig.savefig(path, dpi=dpi)
+                written.append(path)
+            except Exception as e:
+                self.log(f"could not save {path}: {type(e).__name__}: {e}", "err")
+        if written:
+            self.log("written: " + ", ".join(written))
 
     def export_run(self):
         _, run = self._selected_run()
         if run is None:
             messagebox.showinfo("Export", "No run to export yet.")
             return
+        opts = self._opts()
+        try:
+            O.check_options(opts)
+        except ValueError as e:
+            messagebox.showerror("Output settings", str(e))
+            return
+        if not (opts["csv"] or opts["npz"] or opts["meta_json"]):
+            messagebox.showinfo("Export", "Nothing is selected under 'What to "
+                                          "save' in the Output tab.")
+            return
         p = filedialog.asksaveasfilename(
-            title="Export run — basename for .npz and .csv",
-            defaultextension=".npz", initialfile=S.format_name(
-                run["label"].replace(" ", "_")),
-            filetypes=[("NumPy archive + CSV", "*.npz")])
+            title="Export run — base name (extensions are added from the "
+                  "Output tab choices)",
+            initialdir=opts["folder"] or None,
+            initialfile=S.format_name(run["label"].replace(" ", "_")),
+            filetypes=[("All files", "*.*")])
         if p:
-            self._save_run(run, os.path.splitext(p)[0])
+            self._save_run(run, os.path.splitext(p)[0], opts)
 
     def export_sweep(self):
         b, _ = self._selected_run()
@@ -1897,14 +2404,21 @@ class App(tk.Tk):
                 messagebox.showinfo("Export sweep", "No sweep has been run yet.")
                 return
             b = sweeps[-1]
+        opts = self._opts()
+        try:
+            O.check_options(opts)
+        except ValueError as e:
+            messagebox.showerror("Output settings", str(e))
+            return
         p = filedialog.asksaveasfilename(
-            title="Export sweep — basename for .csv and .npz",
-            defaultextension=".csv", initialfile="sweep",
-            filetypes=[("CSV + NumPy archive", "*.csv")])
+            title="Export sweep — base name for the combined file",
+            initialdir=opts["folder"] or None, initialfile="sweep",
+            filetypes=[("All files", "*.*")])
         if not p:
             return
         try:
-            self._write_sweep(b, os.path.splitext(p)[0])
+            files = O.write_sweep(b["runs"], os.path.splitext(p)[0], opts, b["info"])
+            self.log("written: " + ", ".join(files))
         except Exception as e:
             messagebox.showerror("Export sweep", f"{type(e).__name__}: {e}")
 
@@ -1923,12 +2437,10 @@ class App(tk.Tk):
                                start=self.sweep_start.get(),
                                end=self.sweep_end.get(),
                                step=self.sweep_step.get(),
-                               unit=self.sweep_unit.get(),
-                               save=self.sweep_save.get(),
-                               folder=self.sweep_dir.get(),
-                               name=self.sweep_name.get(),
-                               combined=self.sweep_combined.get(),
-                               combined_name=self.sweep_cname.get()))
+                               unit=self.sweep_unit.get()),
+                    output=self._opts(),
+                    plot_styles={name: {str(k): v for k, v in pan.styles.items()}
+                                 for name, pan in FIGURE_PANELS_MAP(self).items()})
 
     def _apply_state(self, st):
         for k, (v, u) in self.cfg_vars.items():
@@ -1948,13 +2460,22 @@ class App(tk.Tk):
         self.overlay.set(pl.get("overlay", False))
         sw = st.get("sweep", {})
         for var, key in ((self.sweep_start, "start"), (self.sweep_end, "end"),
-                         (self.sweep_step, "step"), (self.sweep_unit, "unit"),
-                         (self.sweep_dir, "folder"), (self.sweep_name, "name"),
-                         (self.sweep_cname, "combined_name"),
-                         (self.sweep_save, "save"),
-                         (self.sweep_combined, "combined")):
+                         (self.sweep_step, "step"), (self.sweep_unit, "unit")):
             if key in sw:
                 var.set(sw[key])
+        out = O.default_options()
+        # sessions saved before the Output tab kept these with the sweep
+        for old, new in (("folder", "folder"), ("name", "sweep_name"),
+                         ("save", "auto_sweep"), ("combined", "combined"),
+                         ("combined_name", "combined_name")):
+            if old in sw:
+                out[new] = sw[old]
+        out.update({k: v for k, v in st.get("output", {}).items() if k in out})
+        for k, v in out.items():
+            self.out[k].set(v)
+        for name, pan in FIGURE_PANELS_MAP(self).items():
+            pan.styles = {int(k): v for k, v in
+                          st.get("plot_styles", {}).get(name, {}).items()}
         self.layers = st["layers"]
         self.sel = None
         self.refresh_tree(0)
@@ -2092,8 +2613,26 @@ class App(tk.Tk):
         self.destroy()
 
 
-# units written into file names without non-ASCII characters
-FILE_UNIT_NAMES = {"µm": "um", "Å": "A"}
+# figure-file suffix -> panel, for saving figures and plot styles
+FIGURE_PANELS = ("dRR", "stack", "components", "kernels", "strain_map")
+
+
+def FIGURE_PANELS_MAP(app):
+    return {"dRR": app.drr_panel, "stack": app.stack_panel,
+            "components": app.comp_panel, "kernels": app.kern_panel,
+            "strain_map": app.strain_panel}
+
+
+def fmt_duration(sec):
+    if sec < 10:
+        return f"{sec:.2f} s"
+    if sec < 60:
+        return f"{sec:.1f} s"
+    m, s_ = divmod(int(round(sec)), 60)
+    if m < 60:
+        return f"{m} min {s_:02d} s"
+    h, m = divmod(m, 60)
+    return f"{h} h {m:02d} min"
 
 
 def _dark(hex_color):
@@ -2146,14 +2685,17 @@ HELP_TEXT = """1. Experiment tab: pump/probe wavelengths, fluence, pulse length,
    home, save image), the mouse wheel to zoom, and 'Axes & labels…' to
    edit titles, labels, limits and scales.
 
-4. Thickness sweep tab: pick a layer, give start, end and increment,
-   and optionally a folder and a file-name pattern (e.g.
-   dRR_{material}_{d}{unit}) to save one reflectivity file per
-   thickness plus one combined file.
+4. Thickness sweep tab: pick a layer and give start, end and increment.
+   Before it starts you are told how many simulations and files it
+   gives, the estimated size and the estimated time.
 
-5. File menu: import a conf_file, save/open the whole session, export
-   the selected run (.npz + .csv, with all inputs in the metadata) or a
-   sweep."""
+5. Output tab: folder, automatic saving (single runs, each sweep run,
+   one combined sweep file), file-name patterns, and what to save
+   (CSV columns/format, NPZ contents, metadata JSON, figures).
+
+6. File menu: import a conf_file, save/open the whole session, export
+   the selected run or a sweep (with the Output tab's choices).
+   'Colours…' on each plot changes curve colours and colour maps."""
 
 
 def main():
