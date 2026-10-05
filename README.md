@@ -58,8 +58,14 @@ To add a unit, add one entry to `UNITS` in `units.py`.
 - **Layers tab**: list the layers from the top (the light side) down. The last
   layer is the semi-infinite substrate. For each layer give:
   - n, k at the pump and probe wavelengths, typed in or read from a dispersion
-    file. Files are interpolated, never extrapolated, and you choose the
-    column-1 unit or leave it on auto;
+    file. A file has the same format as the files in the notebook's materials
+    folder: columns wavelength, n, k (k is optional). When you browse to one,
+    n and k at the pump and probe wavelengths are interpolated and filled in
+    straight away, as `MaterialLibrary.nk` does. They update when you change
+    the wavelengths or the file's column-1 unit, and the run uses exactly
+    these values. Nothing is extrapolated: a wavelength outside the file's
+    range is reported in red. If the file has no k column, you type k
+    yourself;
   - ρ, v, Cp, α, B;
   - dñ/dη, or the photoelastic constant p, converted as dñ/dη = −p·ñ³/2 at the
     probe wavelength;

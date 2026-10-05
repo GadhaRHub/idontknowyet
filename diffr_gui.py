@@ -418,6 +418,9 @@ class App(tk.Tk):
         self.log_w.tag_configure("head", font=("Courier", 9, "bold"))
 
         self._build_plots(right)
+        for w in ("pump", "probe"):
+            for var in self.cfg_vars[f"lambda_{w}_nm"]:
+                var.trace_add("write", lambda *_: self.schedule_file_nk())
         self.load_example()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(100, self._poll)
@@ -583,21 +586,24 @@ class App(tk.Tk):
                         variable=self.lv["nk_mode"]).pack(side="left")
         ttk.Radiobutton(rf, text="Dispersion file (interpolated)", value="file",
                         variable=self.lv["nk_mode"]).pack(side="left", padx=10)
-        self.typed_f = ttk.Frame(o)
-        self.typed_f.grid(row=1, column=0, sticky="w")
-        ttk.Label(self.typed_f, text="n").grid(row=0, column=1)
-        ttk.Label(self.typed_f, text="k").grid(row=0, column=2)
-        for r, w in enumerate(("pump", "probe"), 1):
-            ttk.Label(self.typed_f, text=f"at {w} wavelength").grid(
-                row=r, column=0, sticky="w")
-            ttk.Entry(self.typed_f, textvariable=self.lv[f"n_{w}"], width=12).grid(
-                row=r, column=1, padx=2, pady=1)
-            ttk.Entry(self.typed_f, textvariable=self.lv[f"k_{w}"], width=12).grid(
-                row=r, column=2, padx=2, pady=1)
-            self.lit_marks[f"k_{w}"] = ttk.Label(self.typed_f, foreground=LIT_C)
+        self.nk_f = ttk.Frame(o)
+        self.nk_f.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.nk_head = ttk.Label(self.nk_f, foreground=INK2)
+        self.nk_head.grid(row=0, column=0, columnspan=4, sticky="w")
+        ttk.Label(self.nk_f, text="n").grid(row=1, column=1)
+        ttk.Label(self.nk_f, text="k").grid(row=1, column=2)
+        self.nk_entries, self.nk_row_labels = [], {}
+        for r, w in enumerate(("pump", "probe"), 2):
+            self.nk_row_labels[w] = ttk.Label(self.nk_f, text=f"at {w} wavelength")
+            self.nk_row_labels[w].grid(row=r, column=0, sticky="w")
+            for c, q in ((1, "n"), (2, "k")):
+                en = ttk.Entry(self.nk_f, textvariable=self.lv[f"{q}_{w}"], width=12)
+                en.grid(row=r, column=c, padx=2, pady=1)
+                self.nk_entries.append(en)
+            self.lit_marks[f"k_{w}"] = ttk.Label(self.nk_f, foreground=LIT_C)
             self.lit_marks[f"k_{w}"].grid(row=r, column=3, sticky="w")
         self.file_f = ttk.Frame(o)
-        self.file_f.grid(row=2, column=0, sticky="ew")
+        self.file_f.grid(row=1, column=0, sticky="ew")
         ttk.Label(self.file_f, text="File").grid(row=0, column=0, sticky="w")
         ttk.Entry(self.file_f, textvariable=self.lv["nk_file"], width=40).grid(
             row=0, column=1, columnspan=3, sticky="ew", padx=2)
@@ -612,13 +618,20 @@ class App(tk.Tk):
         ttk.Combobox(self.file_f, textvariable=self.lv["nk_file_unit"],
                      values=S.FILE_UNITS, state="readonly", width=8).grid(
             row=1, column=1, sticky="w", padx=2, pady=1)
-        ttk.Button(self.file_f, text="Check file", command=self.check_nk_file
-                   ).grid(row=1, column=2, sticky="w", padx=2)
-        ttk.Label(self.file_f, text="k if the file has no k column:").grid(
-            row=2, column=0, columnspan=2, sticky="w")
+        b = ttk.Button(self.file_f, text="Reload file",
+                       command=self._refresh_file_nk)
+        b.grid(row=1, column=2, sticky="w", padx=2)
+        Tooltip(b, "Read the file again (e.g. after editing it). n and k at "
+                   "the pump and probe wavelengths are filled in below "
+                   "automatically whenever the file, its unit or the "
+                   "wavelengths change.")
+        self.kfill_f = ttk.Frame(self.file_f)
+        self.kfill_f.grid(row=2, column=0, columnspan=5, sticky="w")
+        ttk.Label(self.kfill_f, text="This file has no k column. k to use:"
+                  ).grid(row=0, column=0, columnspan=4, sticky="w")
         for c, w in enumerate(("pump", "probe")):
-            ff = ttk.Frame(self.file_f)
-            ff.grid(row=3, column=c * 2, columnspan=2, sticky="w")
+            ff = ttk.Frame(self.kfill_f)
+            ff.grid(row=1, column=c, sticky="w", padx=(0, 12))
             ttk.Label(ff, text=f"at {w}").pack(side="left")
             ttk.Entry(ff, textvariable=self.lv[f"kfill_{w}"], width=10).pack(
                 side="left", padx=2)
@@ -627,6 +640,7 @@ class App(tk.Tk):
         self.file_info = ttk.Label(self.file_f, foreground=INK2, wraplength=520,
                                    justify="left")
         self.file_info.grid(row=4, column=0, columnspan=5, sticky="w")
+        self._nk_job = None
 
         # --- mechanical & thermal
         m = section(p, "Mechanical & thermal", 2)
@@ -733,14 +747,103 @@ class App(tk.Tk):
         self._refresh_tree_row(self.sel)
         if key in ("material", "d", "d_unit"):
             self.schedule_stack()
+        if key in ("nk_mode", "nk_file", "nk_file_unit", "kfill_pump",
+                   "kfill_probe"):
+            self.schedule_file_nk()
 
     def _show_nk_mode(self):
-        if self.lv["nk_mode"].get() == "file":
-            self.typed_f.grid_remove()
+        file_mode = self.lv["nk_mode"].get() == "file"
+        if file_mode:
             self.file_f.grid()
+            self.nk_head.config(text="n, k interpolated from the file "
+                                     "(read-only; switch to 'Type n, k' to edit):")
         else:
             self.file_f.grid_remove()
-            self.typed_f.grid()
+            self.nk_head.config(text="")
+        for en in self.nk_entries:
+            en.config(state="readonly" if file_mode else "normal")
+        self._update_nk_labels()
+
+    def _wavelengths(self):
+        """Pump and probe wavelengths in nm from the Experiment tab."""
+        lam = {}
+        for w in ("pump", "probe"):
+            v, u = self.cfg_vars[f"lambda_{w}_nm"]
+            lam[w] = U.to_base(float(v.get()), "wavelength", u.get())
+            if not lam[w] > 0:
+                raise ValueError
+        return lam
+
+    def _update_nk_labels(self):
+        try:
+            lam = self._wavelengths()
+        except (ValueError, ZeroDivisionError):
+            lam = {}
+        for w, lab in self.nk_row_labels.items():
+            lab.config(text=f"at {w} λ = {lam[w]:.6g} nm" if w in lam
+                       else f"at {w} wavelength")
+
+    def schedule_file_nk(self):
+        if self._nk_job:
+            self.after_cancel(self._nk_job)
+        self._nk_job = self.after(250, self._refresh_file_nk)
+
+    def _refresh_file_nk(self):
+        """File mode: read the dispersion file and put n, k at the pump and
+        probe wavelengths into the layer, as the model will use them."""
+        self._nk_job = None
+        self._update_nk_labels()
+        if self.sel is None or self.layers[self.sel]["nk_mode"] != "file":
+            return
+        lay = self.layers[self.sel]
+        path = lay["nk_file"].strip()
+        vals = {k: "" for k in S.NK_KEYS}
+        lines, bad = [], False
+        if not path:
+            self.kfill_f.grid_remove()
+            lines.append("Choose an n,k file with Browse…")
+        else:
+            try:
+                tab = self.cache.get(path, lay["nk_file_unit"])
+            except Exception as e:
+                tab, bad = None, True
+                self.kfill_f.grid_remove()
+                lines.append(f"Cannot read {path}: {e}" if os.path.isfile(path)
+                             else f"File not found: {path}")
+            if tab is not None:
+                has_k = tab["k"] is not None
+                (self.kfill_f.grid_remove if has_k else self.kfill_f.grid)()
+                lines.append(f"{os.path.basename(path)}: {len(tab['lam'])} rows, "
+                             f"{tab['lam'][0]:.6g}–{tab['lam'][-1]:.6g} nm, "
+                             f"{'n and k' if has_k else 'n only'}")
+                if S.unit_note(tab):
+                    lines.append(S.unit_note(tab))
+                try:
+                    lam = self._wavelengths()
+                except (ValueError, ZeroDivisionError):
+                    lam, bad = {}, True
+                    lines.append("Set valid pump and probe wavelengths in the "
+                                 "Experiment tab.")
+                for w, lw in lam.items():
+                    try:
+                        n, k, note = M.interp_nk(tab, lw)
+                    except M.MissingMaterialData:
+                        bad = True
+                        lines.append(f"{w} λ = {lw:.6g} nm is outside the "
+                                     f"file's range; the model will not "
+                                     f"extrapolate.")
+                        continue
+                    vals[f"n_{w}"] = f"{n:.6g}"
+                    vals[f"k_{w}"] = (f"{k:.6g}" if k is not None
+                                      else lay[f"kfill_{w}"].strip())
+                    lines.append(f"{w}: n = {n:.6g}, k = "
+                                 f"{vals[f'k_{w}'] or '?'}  ({note}"
+                                 f"{'' if k is not None else ', k typed above'})")
+        for key, s in vals.items():
+            if self.lv[key].get() != s:
+                self.lv[key].set(s)
+        self.file_info.config(text="\n".join(lines),
+                              foreground="#c00000" if bad else INK2)
 
     def _show_pe_mode(self):
         mode = self.lv["pe_mode"].get()
@@ -752,8 +855,12 @@ class App(tk.Tk):
         if self.sel is None:
             return
         lay = self.layers[self.sel]
+        file_mode = lay["nk_mode"] == "file"
         for key, mark in self.lit_marks.items():
-            mark.config(text="● lit." if S.is_placeholder(lay, key) else "")
+            hidden = (key in ("k_pump", "k_probe") and file_mode or
+                      key in ("kfill_pump", "kfill_probe") and not file_mode)
+            mark.config(text="● lit." if S.is_placeholder(lay, key)
+                        and not hidden else "")
 
     def _tree_values(self, i):
         lay = self.layers[i]
@@ -811,6 +918,7 @@ class App(tk.Tk):
             f()
         self._refresh_lit_marks()
         self.file_info.config(text="")
+        self._refresh_file_nk()
         self.schedule_stack()           # moves the selection frame
 
     def add_layer(self):
@@ -882,31 +990,15 @@ class App(tk.Tk):
                  f"n is never pre-filled.")
 
     def browse_nk(self):
+        cur = self.lv["nk_file"].get().strip()
         p = filedialog.askopenfilename(
             title="n,k dispersion file",
+            initialdir=os.path.dirname(cur) if cur else None,
             filetypes=[("Text tables", "*.txt *.dat *.csv *.nk"), ("All", "*.*")])
         if p:
-            self.lv["nk_file"].set(p)
-            self.check_nk_file()
-
-    def check_nk_file(self):
-        if self.sel is None:
-            return
-        try:
-            cfg, _ = S.resolve_config(self._cfg_entries(), self._flags())
-            _, _, notes = S.layer_nk(self.layers[self.sel], cfg, self.cache,
-                                     f"Layer {self.sel + 1}")
-            tab = self.cache.get(self.layers[self.sel]["nk_file"],
-                                 self.layers[self.sel]["nk_file_unit"])
-            info = (f"{len(tab['lam'])} rows, {tab['lam'][0]:.1f}–"
-                    f"{tab['lam'][-1]:.1f} nm, "
-                    f"{'n and k' if tab['k'] is not None else 'n only'}\n"
-                    + "\n".join(notes))
-            self.file_info.config(text=info, foreground=INK2)
-        except S.InputError as e:
-            self.file_info.config(text="\n".join(e.errors), foreground="#c00000")
-        except Exception as e:
-            self.file_info.config(text=str(e), foreground="#c00000")
+            self.lv["nk_mode"].set("file")
+            self.lv["nk_file"].set(os.path.normpath(p))
+            self._refresh_file_nk()
 
     # ----------------------------------------------------------------- sweep
     def _build_sweep_tab(self):

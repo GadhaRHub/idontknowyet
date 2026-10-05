@@ -314,6 +314,16 @@ class DispersionCache:
         return tab
 
 
+def unit_note(tab):
+    """Why column 1 of a dispersion table was read in the unit it was
+    (empty when the unit was given explicitly or is plainly nm)."""
+    if not tab["why"]:
+        return ""
+    why = re.sub(r"pass units=\{.*?\}", "set the file's column-1 unit in the "
+                 "layer editor", tab["why"])
+    return f"column 1 of {os.path.basename(tab['path'])} read as {tab['unit']}: {why}"
+
+
 def layer_nk(lay, cfg, cache, tag="layer"):
     """(n_pump, n_probe, notes) for one layer; raises InputError."""
     errors, notes, out = [], [], {}
@@ -329,10 +339,7 @@ def layer_nk(lay, cfg, cache, tag="layer"):
         except Exception as e:
             raise InputError([f"{tag}: cannot read {path}: {e}"])
         if tab["why"]:
-            why = re.sub(r"pass units=\{.*?\}", "set the file's column-1 "
-                         "unit in the layer editor", tab["why"])
-            notes.append(f"column 1 of {os.path.basename(path)} read as "
-                         f"{tab['unit']}: {why}")
+            notes.append(unit_note(tab))
         for w in ("pump", "probe"):
             try:
                 n, k, note = M.interp_nk(tab, lam[w])
