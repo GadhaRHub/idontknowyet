@@ -15,6 +15,7 @@ python diffr_gui.py
 |---|---|
 | `diffr_gui.py` | The GUI. Run this. |
 | `sample_input.py` | Turns what the user typed (numbers + units) into model units, builds the sample, imports conf files, saves/loads sessions. No GUI code. |
+| `outputs.py` | Writes results the way the Output tab says (CSV, NPZ, metadata JSON) and estimates file counts, sizes and run times. No GUI code. |
 | `units.py` | The unit menus and conversion factors. |
 | `diffr_model.py` | The physics, taken unchanged from the notebook (TMM, absorption, sensitivity kernels, leapfrog solver, save/plot). |
 | `diffR_thinfilm_model_custom.ipynb` | The original notebook. |
@@ -56,7 +57,9 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   decay time, time axis, grid and CFL factor, plus checkboxes for the four
   ΔR/R contributions.
 - **Layers tab**: list the layers from the top (the light side) down. The last
-  layer is the semi-infinite substrate. For each layer give:
+  layer is the semi-infinite substrate. The buttons stretch with the panel.
+  Drag the divider between the layer list and the editor, or between the
+  left panel and the plots, to resize them. For each layer give:
   - n, k at the pump and probe wavelengths, typed in or read from a dispersion
     file. A file has the same format as the files in the notebook's materials
     folder: columns wavelength, n, k (k is optional). When you browse to one,
@@ -81,16 +84,34 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   list to the clipboard. The list also opens after *Fill from literature*.
 - **Thickness sweep tab**: pick a layer and give a start, an end and an
   increment in any thickness unit. The end is included when it falls on the
-  step grid, and the tab shows the resulting list of runs. The curves are
-  overlaid. To run many simulations unattended, tick *Save each run's
-  reflectivity file*, choose a folder and a file-name pattern such as
-  `dRR_{material}_{d}{unit}`. The fields are `{material}`, `{layer}`, `{d}`,
-  `{unit}`, `{i}` (run number) and `{n}` (number of runs). Each run is then
-  written as `.csv` + `.npz` as soon as it finishes, so a cancelled sweep
-  keeps what was done. Optionally one combined file holds all the
-  thicknesses (`{start}`, `{end}`, `{step}` are available for its name). The
-  tab previews the file names, refuses patterns that would give two runs the
-  same name, and asks before overwriting existing files.
+  step grid. The tab shows what the sweep will produce: the number of
+  simulations, the number of files and their names, the estimated disk space
+  and the estimated time. Before the sweep starts, the same summary is shown
+  for confirmation. The time estimate uses the speed of the last run, so it
+  appears once one run has been timed.
+- **Output tab**: everything about saving, all of it kept in the session.
+  - *Where*: the output folder.
+  - *When*: save automatically after every single run, after every run of a
+    sweep (each file is written as soon as its run finishes, so a cancelled
+    sweep keeps what was done), and/or one combined file per sweep with all
+    thicknesses side by side.
+  - *Names*: a pattern for each kind of file. Fields: `{run}`, `{date}`,
+    `{time}`, and for sweeps `{material}`, `{layer}`, `{d}`, `{unit}`, `{i}`,
+    `{n}` (combined file: `{start}`, `{end}`, `{step}`). Unknown fields and
+    patterns that would give two runs the same name are caught before
+    anything runs, and you are asked before files are overwritten.
+  - *What*: a CSV table (choose the component columns, the time unit,
+    separator, number format and header row), an NPZ archive (optionally
+    with depth profiles and the strain map), a metadata JSON (every input
+    with its unit, the converted values, literature placeholders, run time),
+    and figures (ΔR/R, stack diagram, the extra plots shown; PNG/PDF/SVG at a
+    chosen dpi). Figures are saved as they look on screen, with your labels
+    and colours.
+  - A preview lists the next file names, how many files and roughly how much
+    space. File → Export uses the same choices.
+- **Run time**: the status bar shows the time elapsed while running, and
+  afterwards how long the run took (for a sweep, the total and the time per
+  run). Each run's time is also logged and stored in its metadata.
 - **Plots**: the stack diagram and the total ΔR/R are always shown. Click a
   layer in the diagram to edit it. *Colours…* above the diagram sets the
   colour of each material (layers of the same material share one); the
@@ -98,15 +119,16 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   or *Strain map η(z,t)* for more tabs (the strain map must be ticked before
   the run). Every plot has the matplotlib toolbar (zoom, pan, home, back,
   save image), mouse-wheel zoom, and *Axes & labels…* for the title, axis
-  labels, limits, linear/log scale, grid, legend and font size. Your label
-  edits are kept when the plot redraws.
+  labels, limits, linear/log scale, grid, legend and font size. *Colours…* on
+  each plot changes the colour of any curve, colours all curves from a colour
+  map (e.g. viridis for a sweep), or changes the colour map of the strain map.
+  Label and colour edits are kept when the plot redraws and are saved with
+  the session.
 - **File menu**:
   - import an fs-sonar `conf_file_*.txt`. Thicknesses, n,k files and peCoef
     come from the conf; the other constants come from the folder's
     `properties.txt` / `*.prop` files, or else from literature;
   - save or open the whole session as JSON;
-  - export the selected run (`.npz` + `.csv`; the metadata holds every input
-    with its unit and the converted material values);
-  - export a sweep (`.csv` + `.npz`).
+  - export the selected run or a sweep, with the Output tab's choices.
 
 Runs execute in the background with a progress bar and a Cancel button.
