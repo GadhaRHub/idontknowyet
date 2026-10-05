@@ -11,6 +11,7 @@ Needs numpy and matplotlib; tkinter ships with Python.
 """
 
 import copy
+import json
 import os
 import queue
 import threading
@@ -356,6 +357,53 @@ class AxesDialog(tk.Toplevel):
         self.panel.canvas.draw_idle()
 
 
+class PlaceholderDialog(tk.Toplevel):
+    """Table of every value that is still a literature pre-fill."""
+
+    def __init__(self, master, rows, title, note=""):
+        super().__init__(master)
+        self.title(title)
+        self.transient(master)
+        self.geometry("780x380")
+        f = ttk.Frame(self, padding=8)
+        f.pack(fill="both", expand=True)
+        layers = sorted({r[0] for r in rows})
+        head = (f"{len(rows)} literature placeholder value(s) in "
+                f"{len(layers)} layer(s). These are typical values from the "
+                f"LITERATURE table, not measurements of your sample."
+                if rows else "No literature placeholders: every value was "
+                             "typed, read from a file or edited.")
+        ttk.Label(f, text=head + ("\n" + note if note else ""), wraplength=690,
+                  justify="left").pack(anchor="w", pady=(0, 6))
+        cols = ("layer", "q", "val", "unit")
+        tf = ttk.Frame(f)
+        tf.pack(fill="both", expand=True)
+        tv = ttk.Treeview(tf, columns=cols, show="headings", height=12)
+        for c, h, w in zip(cols, ("Layer", "Quantity", "Value", "Unit"),
+                           (140, 300, 140, 150)):
+            tv.heading(c, text=h)
+            tv.column(c, width=w, anchor="w")
+        sb = ttk.Scrollbar(tf, orient="vertical", command=tv.yview)
+        tv.configure(yscrollcommand=sb.set)
+        tv.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        for n, mat, q, val, unit in rows:
+            tv.insert("", "end", values=(f"{n}: {mat}", q, val, unit))
+        self.text = "\n".join(f"{n}: {mat}\t{q}\t{val}\t{unit}"
+                              for n, mat, q, val, unit in rows)
+        bb = ttk.Frame(f)
+        bb.pack(fill="x", pady=(6, 0))
+        ttk.Label(bb, foreground=INK2, text="Edit a value in the Layers tab to "
+                  "replace a placeholder.").pack(side="left")
+        ttk.Button(bb, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(bb, text="Copy to clipboard", command=self.copy
+                   ).pack(side="right", padx=4)
+
+    def copy(self):
+        self.clipboard_clear()
+        self.clipboard_append("layer\tquantity\tvalue\tunit\n" + self.text)
+
+
 # ---------------------------------------------------------------------------
 # The application
 # ---------------------------------------------------------------------------
@@ -449,6 +497,9 @@ class App(tk.Tk):
                        accelerator="F5")
         rm.add_command(label="Run thickness sweep", command=self.run_sweep)
         rm.add_command(label="Cancel", command=self.cancel)
+        rm.add_separator()
+        rm.add_command(label="List literature placeholders…",
+                       command=self.show_placeholders)
         mb.add_cascade(label="Run", menu=rm)
         hm = tk.Menu(mb, tearoff=0)
         hm.add_command(label="Units and conversions", command=self.show_units)
@@ -541,6 +592,13 @@ class App(tk.Tk):
                           ("Up ↑", lambda: self.move_layer(-1)),
                           ("Down ↓", lambda: self.move_layer(1))):
             ttk.Button(bf, text=text, command=cmd, width=14).pack(pady=1)
+        b = ttk.Button(bf, text="Literature values…", width=14,
+                       command=self.show_placeholders)
+        b.pack(pady=(6, 1))
+        Tooltip(b, "List every value that is still a literature pre-fill, "
+                   "for all layers. Double-click a layer to list only its "
+                   "values.")
+        self.tree.bind("<Double-1>", self._on_tree_double)
 
         self.editor = ScrollableFrame(tab)
         self.editor.pack(fill="both", expand=True, pady=(6, 0))
@@ -892,6 +950,19 @@ class App(tk.Tk):
         self.schedule_stack()
         self._refresh_sweep_layers()
 
+    def show_placeholders(self, layer=None):
+        rows = S.placeholder_rows(self.layers)
+        title = "Literature placeholders"
+        if layer is not None:
+            rows = [r for r in rows if r[0] == layer + 1]
+            title += f" — layer {layer + 1} ({self.layers[layer]['material']})"
+        PlaceholderDialog(self, rows, title)
+
+    def _on_tree_double(self, e):
+        row = self.tree.identify_row(e.y)
+        if row:
+            self.show_placeholders(int(row))
+
     def _on_tree_select(self, _):
         s = self.tree.selection()
         if s and int(s[0]) != self.sel:
@@ -988,6 +1059,11 @@ class App(tk.Tk):
         self.log(f"Layer {self.sel + 1} ({name}): literature values for "
                  f"{', '.join(filled) or 'nothing (all fields already set)'}; "
                  f"n is never pre-filled.")
+        rows = [r for r in S.placeholder_rows(self.layers) if r[0] == self.sel + 1]
+        PlaceholderDialog(self, rows, f"Literature values — layer {self.sel + 1} "
+                                      f"({name})",
+                          note="" if filled else "Nothing new was filled; all "
+                          "fields already had values.")
 
     def browse_nk(self):
         cur = self.lv["nk_file"].get().strip()
@@ -1002,32 +1078,165 @@ class App(tk.Tk):
 
     # ----------------------------------------------------------------- sweep
     def _build_sweep_tab(self):
-        tab = ttk.Frame(self.tabs, padding=8)
-        self.tabs.add(tab, text="Thickness sweep")
+        sf = ScrollableFrame(self.tabs)
+        self.tabs.add(sf, text="Thickness sweep")
+        tab = sf.inner
         ttk.Label(tab, wraplength=560, justify="left", foreground=INK2,
                   text="Vary the thickness of one layer, run the model for each "
-                       "value with everything else unchanged, and overlay the "
-                       "ΔR/R curves.").grid(row=0, column=0, columnspan=4,
-                                            sticky="w", pady=(0, 8))
-        ttk.Label(tab, text="Layer").grid(row=1, column=0, sticky="w")
+                       "value with everything else unchanged, overlay the ΔR/R "
+                       "curves, and (optionally) save one reflectivity file "
+                       "per thickness.").grid(row=0, column=0, sticky="w",
+                                               padx=8, pady=(6, 2))
+        g = section(tab, "Thickness range", 1)
+        ttk.Label(g, text="Layer").grid(row=0, column=0, sticky="w")
         self.sweep_layer = tk.StringVar()
-        self.sweep_cb = ttk.Combobox(tab, textvariable=self.sweep_layer,
+        self.sweep_cb = ttk.Combobox(g, textvariable=self.sweep_layer,
                                      state="readonly", width=30)
-        self.sweep_cb.grid(row=1, column=1, columnspan=2, sticky="w", pady=2)
-        ttk.Label(tab, text="Thicknesses").grid(row=2, column=0, sticky="w")
-        self.sweep_vals = tk.StringVar(value="100, 200, 300, 400, 500, 588")
-        ttk.Entry(tab, textvariable=self.sweep_vals, width=34).grid(
-            row=2, column=1, sticky="w", pady=2)
+        self.sweep_cb.grid(row=0, column=1, columnspan=4, sticky="w", pady=2)
+        self.sweep_start = tk.StringVar(value="100")
+        self.sweep_end = tk.StringVar(value="600")
+        self.sweep_step = tk.StringVar(value="100")
         self.sweep_unit = tk.StringVar(value="nm")
-        ttk.Combobox(tab, textvariable=self.sweep_unit, state="readonly", width=6,
-                     values=U.choices("thickness")).grid(row=2, column=2,
-                                                         sticky="w", padx=2)
-        ttk.Label(tab, foreground=INK2,
-                  text="Comma-separated list, or start:stop:step "
-                       "(e.g. 100:600:100, stop included)").grid(
-            row=3, column=1, columnspan=3, sticky="w")
-        ttk.Button(tab, text="Run sweep", command=self.run_sweep).grid(
-            row=4, column=1, sticky="w", pady=10)
+        for c, (lab, var) in enumerate((("Start", self.sweep_start),
+                                        ("End", self.sweep_end),
+                                        ("Increment", self.sweep_step))):
+            ttk.Label(g, text=lab).grid(row=1, column=1 + c, sticky="w")
+            ttk.Entry(g, textvariable=var, width=10).grid(
+                row=2, column=1 + c, sticky="w", padx=(0, 6))
+        ttk.Label(g, text="Thickness").grid(row=2, column=0, sticky="w")
+        ttk.Combobox(g, textvariable=self.sweep_unit, state="readonly", width=6,
+                     values=U.choices("thickness")).grid(row=2, column=4,
+                                                         sticky="w")
+        self.sweep_preview = ttk.Label(g, foreground=INK2, wraplength=520,
+                                       justify="left")
+        self.sweep_preview.grid(row=3, column=0, columnspan=5, sticky="w",
+                                pady=(4, 0))
+
+        o = section(tab, "Output files", 2)
+        self.sweep_save = tk.BooleanVar(value=False)
+        ttk.Checkbutton(o, text="Save each run's reflectivity file "
+                               "(.csv + .npz) automatically",
+                        variable=self.sweep_save).grid(
+            row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(o, text="Folder").grid(row=1, column=0, sticky="w")
+        self.sweep_dir = tk.StringVar(value=os.getcwd())
+        ttk.Entry(o, textvariable=self.sweep_dir, width=42).grid(
+            row=1, column=1, sticky="ew", padx=2, pady=2)
+        ttk.Button(o, text="Browse…", command=self._browse_sweep_dir).grid(
+            row=1, column=2, padx=2)
+        lab = ttk.Label(o, text="File name")
+        lab.grid(row=2, column=0, sticky="w")
+        self.sweep_name = tk.StringVar(value="dRR_{material}_{d}{unit}")
+        ttk.Entry(o, textvariable=self.sweep_name, width=42).grid(
+            row=2, column=1, sticky="ew", padx=2, pady=2)
+        tip = ("Fields you can use in the names:\n"
+               "  {material}  name of the swept layer\n"
+               "  {layer}     its number in the stack\n"
+               "  {d}         thickness, in the unit chosen above\n"
+               "  {unit}      that unit (nm, um, A, m)\n"
+               "  {i}         run number 1, 2, 3 …\n"
+               "  {n}         number of runs\n"
+               ".csv and .npz are added automatically.")
+        Tooltip(lab, tip)
+        self.sweep_combined = tk.BooleanVar(value=True)
+        ttk.Checkbutton(o, text="Also save all thicknesses in one combined file:",
+                        variable=self.sweep_combined).grid(
+            row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(o, text="Combined").grid(row=4, column=0, sticky="w")
+        self.sweep_cname = tk.StringVar(value="dRR_{material}_sweep_{start}-{end}{unit}")
+        ttk.Entry(o, textvariable=self.sweep_cname, width=42).grid(
+            row=4, column=1, sticky="ew", padx=2, pady=2)
+        ttk.Label(o, foreground=INK2, justify="left", text=tip.replace(
+            "\n  {i}         run number 1, 2, 3 …", "").replace(
+            "  {d}         thickness, in the unit chosen above\n",
+            "  {d}         thickness (per-run files)\n"
+            "  {start} {end} {step}  the range (combined file)\n")).grid(
+            row=5, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.name_preview = ttk.Label(o, foreground=INK2, wraplength=520,
+                                      justify="left")
+        self.name_preview.grid(row=6, column=0, columnspan=3, sticky="w",
+                               pady=(4, 0))
+        o.columnconfigure(1, weight=1)
+
+        ttk.Button(tab, text="▶ Run sweep", command=self.run_sweep).grid(
+            row=3, column=0, sticky="w", padx=8, pady=10)
+        for v in (self.sweep_layer, self.sweep_start, self.sweep_end,
+                  self.sweep_step, self.sweep_unit, self.sweep_save,
+                  self.sweep_dir, self.sweep_name, self.sweep_combined,
+                  self.sweep_cname):
+            v.trace_add("write", lambda *_: self._update_sweep_preview())
+
+    def _browse_sweep_dir(self):
+        d = filedialog.askdirectory(title="Folder for the sweep files",
+                                    initialdir=self.sweep_dir.get() or None)
+        if d:
+            self.sweep_dir.set(os.path.normpath(d))
+
+    def _sweep_plan(self):
+        """(layer index, values, unit, per-run base paths or None,
+        combined base path or None); raises ValueError with a message."""
+        sl = self.sweep_layer.get()
+        if not sl:
+            raise ValueError("Add at least one layer above the substrate to "
+                             "sweep.")
+        idx = int(sl.split(":")[0]) - 1
+        try:
+            a, b, st = (float(v.get()) for v in
+                        (self.sweep_start, self.sweep_end, self.sweep_step))
+        except ValueError:
+            raise ValueError("Start, end and increment must be numbers.")
+        vals = S.range_values(a, b, st)
+        if vals[0] <= 0:
+            raise ValueError("Thicknesses must be > 0.")
+        unit = self.sweep_unit.get()
+        uname = FILE_UNIT_NAMES.get(unit, unit)
+        mat = self.layers[idx]["material"].strip() or f"layer{idx + 1}"
+        bases = cbase = None
+        folder = self.sweep_dir.get().strip()
+        if self.sweep_save.get() or self.sweep_combined.get():
+            if not folder:
+                raise ValueError("Choose a folder for the output files.")
+        if self.sweep_save.get():
+            bases = [os.path.join(folder, S.format_name(
+                self.sweep_name.get(), material=mat, layer=idx + 1, d=f"{v:g}",
+                unit=uname, i=i + 1, n=len(vals))) for i, v in enumerate(vals)]
+            if len(set(bases)) != len(bases):
+                raise ValueError("The file name gives the same name to several "
+                                 "runs; include {d} or {i}.")
+        if self.sweep_combined.get():
+            try:
+                cbase = os.path.join(folder, self.sweep_cname.get().format(
+                    material=mat, layer=idx + 1, unit=uname, n=len(vals),
+                    start=f"{a:g}", end=f"{vals[-1]:g}", step=f"{st:g}"))
+            except (KeyError, IndexError, ValueError) as e:
+                raise ValueError(f"Combined file name: unknown field {e}; use "
+                                 f"{{material}} {{layer}} {{start}} {{end}} "
+                                 f"{{step}} {{unit}} {{n}}")
+            cbase = os.path.join(folder, S.format_name(os.path.basename(cbase)))
+        return idx, vals, unit, bases, cbase
+
+    def _update_sweep_preview(self):
+        try:
+            idx, vals, unit, bases, cbase = self._sweep_plan()
+        except ValueError as e:
+            self.sweep_preview.config(text=str(e), foreground="#c00000")
+            self.name_preview.config(text="")
+            return
+        shown = ", ".join(f"{v:g}" for v in vals[:8]) + (
+            f", … {vals[-1]:g}" if len(vals) > 8 else "")
+        self.sweep_preview.config(
+            text=f"{len(vals)} runs: {shown} {unit}", foreground=INK2)
+        lines = []
+        if bases:
+            names = [os.path.basename(b) + ".csv" for b in bases]
+            lines.append("Files: " + (", ".join(names) if len(names) <= 3 else
+                                      f"{names[0]}, {names[1]}, … {names[-1]}"))
+        if cbase:
+            lines.append(f"Combined: {os.path.basename(cbase)}.csv")
+        if not lines:
+            lines.append("No files are written automatically (you can still "
+                         "use File → Export sweep afterwards).")
+        self.name_preview.config(text="\n".join(lines))
 
     def _refresh_sweep_layers(self):
         vals = [f"{i + 1}: {l['material']}" for i, l in enumerate(self.layers[:-1])]
@@ -1035,6 +1244,7 @@ class App(tk.Tk):
         self.sweep_cb.config(values=vals)
         if cur not in vals:
             self.sweep_layer.set(vals[0] if vals else "")
+        self._update_sweep_preview()
 
     # --------------------------------------------------------------- run bar
     def _build_run_bar(self, parent):
@@ -1422,21 +1632,22 @@ class App(tk.Tk):
     def run_sweep(self):
         if self._busy():
             return
-        sl = self.sweep_layer.get()
-        if not sl:
-            messagebox.showerror("Sweep", "Add at least one layer above the "
-                                          "substrate to sweep.")
-            return
-        idx = int(sl.split(":")[0]) - 1
         try:
-            vals = S.parse_value_list(self.sweep_vals.get())
+            idx, vals, unit, bases, cbase = self._sweep_plan()
         except ValueError as e:
-            messagebox.showerror("Sweep", f"Thicknesses: {e}")
+            messagebox.showerror("Sweep", str(e))
             return
-        if any(v <= 0 for v in vals):
-            messagebox.showerror("Sweep", "All thicknesses must be > 0.")
+        if len(vals) > 50 and not messagebox.askyesno(
+                "Sweep", f"This starts {len(vals)} simulations. Continue?"):
             return
-        unit = self.sweep_unit.get()
+        existing = [p for b in (bases or []) + ([cbase] if cbase else [])
+                    for p in (b + ".csv", b + ".npz") if os.path.exists(p)]
+        if existing and not messagebox.askyesno(
+                "Sweep", f"{len(existing)} output file(s) already exist, e.g.\n"
+                         f"{existing[0]}\n\nOverwrite them?"):
+            return
+        for b in (bases or []) + ([cbase] if cbase else []):
+            os.makedirs(os.path.dirname(b) or ".", exist_ok=True)
         name = self.layers[idx]["material"]
         jobs = []
         self.run_counter += 1
@@ -1452,10 +1663,13 @@ class App(tk.Tk):
                              cfg=cfg, stack=stack, materials=mats,
                              inputs=self._snapshot(layers),
                              sweep_value=v, sweep_unit=unit,
-                             sweep_nm=U.to_base(v, "thickness", unit)))
+                             sweep_nm=U.to_base(v, "thickness", unit),
+                             save_base=bases[j] if bases else None))
         self.log(f"— {tag}: layer {idx + 1} ({name}) at {len(vals)} thicknesses: "
-                 f"{', '.join(f'{v:g}' for v in vals)} {unit}", "head")
-        self._start(jobs, dict(kind="sweep",
+                 f"{vals[0]:g} … {vals[-1]:g} {unit}", "head")
+        if bases or cbase:
+            self.log(f"   output folder: {os.path.dirname((bases or [cbase])[0])}")
+        self._start(jobs, dict(kind="sweep", combined=cbase,
                                info=f"layer {idx + 1} ({name}) thickness"))
 
     def _busy(self):
@@ -1505,6 +1719,8 @@ class App(tk.Tk):
                     self._pending["runs"].append(a)
                     self.log(f"{a['label']} finished")
                     self.log(M.run_summary(b))
+                    if a.get("save_base"):
+                        self._save_run(a, a["save_base"])
                 elif kind in ("done", "cancelled", "error"):
                     self._finish(kind, a, b)
         except queue.Empty:
@@ -1521,6 +1737,12 @@ class App(tk.Tk):
         elif kind == "cancelled":
             self.log(f"cancelled after {len(batch['runs'])} of "
                      f"{batch['n_jobs']} runs", "warn")
+        if batch["runs"] and batch.get("combined"):
+            try:
+                self._write_sweep(batch, batch["combined"])
+            except Exception as e:
+                self.log(f"could not write the combined file: "
+                         f"{type(e).__name__}: {e}", "err")
         if batch["runs"]:
             self.batches.append(batch)
             self._refresh_run_list()
@@ -1544,19 +1766,7 @@ class App(tk.Tk):
                     return b, r
         return None, None
 
-    def export_run(self):
-        _, run = self._selected_run()
-        if run is None:
-            messagebox.showinfo("Export", "No run to export yet.")
-            return
-        p = filedialog.asksaveasfilename(
-            title="Export run — basename for .npz and .csv",
-            defaultextension=".npz", initialfile=run["label"].replace(":", "")
-            .replace(" ", "_").replace("=", ""),
-            filetypes=[("NumPy archive + CSV", "*.npz")])
-        if not p:
-            return
-        base = os.path.splitext(p)[0]
+    def _save_run(self, run, base):
         res = run["res"]
         try:
             files = M.save_result(
@@ -1565,9 +1775,41 @@ class App(tk.Tk):
                                 materials_model_units=S.materials_as_json(
                                     res["stack"], res["materials"])))
         except Exception as e:
-            messagebox.showerror("Export", f"{type(e).__name__}: {e}")
-            return
+            self.log(f"could not save {base}: {type(e).__name__}: {e}", "err")
+            return False
         self.log("written: " + ", ".join(files))
+        return True
+
+    def _write_sweep(self, b, base):
+        t = b["runs"][0]["res"]["t_ps"]
+        cols = lambda k: np.column_stack([r["res"][k] for r in b["runs"]])
+        d_nm = np.array([r["sweep_nm"] for r in b["runs"]])
+        header = "t_ps," + ",".join(f"dR_over_R_d={r['sweep_value']:g}"
+                                    f"{FILE_UNIT_NAMES.get(r['sweep_unit'], r['sweep_unit'])}"
+                                    for r in b["runs"])
+        np.savetxt(base + ".csv", np.column_stack([t, cols("drr")]), delimiter=",",
+                   header=header, comments="", fmt="%.8e", encoding="utf-8")
+        np.savez_compressed(
+            base + ".npz", t_ps=t, drr=cols("drr"), thickness_nm=d_nm,
+            drr_strain=cols("drr_strain"), drr_disp=cols("drr_disp"),
+            drr_lattice=cols("drr_lattice"), drr_electron=cols("drr_electron"),
+            labels=np.array([r["label"] for r in b["runs"]]),
+            meta=json.dumps(dict(swept=b["info"],
+                                 gui_inputs=b["runs"][0]["inputs"])))
+        self.log(f"written: {base}.csv, {base}.npz")
+
+    def export_run(self):
+        _, run = self._selected_run()
+        if run is None:
+            messagebox.showinfo("Export", "No run to export yet.")
+            return
+        p = filedialog.asksaveasfilename(
+            title="Export run — basename for .npz and .csv",
+            defaultextension=".npz", initialfile=S.format_name(
+                run["label"].replace(" ", "_")),
+            filetypes=[("NumPy archive + CSV", "*.npz")])
+        if p:
+            self._save_run(run, os.path.splitext(p)[0])
 
     def export_sweep(self):
         b, _ = self._selected_run()
@@ -1583,28 +1825,10 @@ class App(tk.Tk):
             filetypes=[("CSV + NumPy archive", "*.csv")])
         if not p:
             return
-        base = os.path.splitext(p)[0]
-        t = b["runs"][0]["res"]["t_ps"]
-        drr = np.column_stack([r["res"]["drr"] for r in b["runs"]])
-        d_nm = np.array([r["sweep_nm"] for r in b["runs"]])
-        header = "t_ps," + ",".join(f"dR_over_R_d={r['sweep_value']:g}"
-                                    f"{r['sweep_unit']}" for r in b["runs"])
         try:
-            np.savetxt(base + ".csv", np.column_stack([t, drr]), delimiter=",",
-                       header=header, comments="", fmt="%.8e", encoding="utf-8")
-            np.savez_compressed(
-                base + ".npz", t_ps=t, drr=drr, thickness_nm=d_nm,
-                drr_strain=np.column_stack([r["res"]["drr_strain"] for r in b["runs"]]),
-                drr_disp=np.column_stack([r["res"]["drr_disp"] for r in b["runs"]]),
-                drr_lattice=np.column_stack([r["res"]["drr_lattice"] for r in b["runs"]]),
-                drr_electron=np.column_stack([r["res"]["drr_electron"] for r in b["runs"]]),
-                labels=np.array([r["label"] for r in b["runs"]]),
-                meta=__import__("json").dumps(dict(
-                    swept=b["info"], gui_inputs=b["runs"][0]["inputs"])))
+            self._write_sweep(b, os.path.splitext(p)[0])
         except Exception as e:
             messagebox.showerror("Export sweep", f"{type(e).__name__}: {e}")
-            return
-        self.log(f"written: {base}.csv, {base}.npz")
 
     # ----------------------------------------------------------- sessions
     def _state(self):
@@ -1617,8 +1841,15 @@ class App(tk.Tk):
                                scale_exp=self.scale_exp.get(),
                                overlay=self.overlay.get()),
                     sweep=dict(layer=self.sweep_layer.get(),
-                               values=self.sweep_vals.get(),
-                               unit=self.sweep_unit.get()))
+                               start=self.sweep_start.get(),
+                               end=self.sweep_end.get(),
+                               step=self.sweep_step.get(),
+                               unit=self.sweep_unit.get(),
+                               save=self.sweep_save.get(),
+                               folder=self.sweep_dir.get(),
+                               name=self.sweep_name.get(),
+                               combined=self.sweep_combined.get(),
+                               combined_name=self.sweep_cname.get()))
 
     def _apply_state(self, st):
         for k, (v, u) in self.cfg_vars.items():
@@ -1636,8 +1867,14 @@ class App(tk.Tk):
         self.scale_exp.set(pl.get("scale_exp", "3"))
         self.overlay.set(pl.get("overlay", False))
         sw = st.get("sweep", {})
-        self.sweep_vals.set(sw.get("values", self.sweep_vals.get()))
-        self.sweep_unit.set(sw.get("unit", "nm"))
+        for var, key in ((self.sweep_start, "start"), (self.sweep_end, "end"),
+                         (self.sweep_step, "step"), (self.sweep_unit, "unit"),
+                         (self.sweep_dir, "folder"), (self.sweep_name, "name"),
+                         (self.sweep_cname, "combined_name"),
+                         (self.sweep_save, "save"),
+                         (self.sweep_combined, "combined")):
+            if key in sw:
+                var.set(sw[key])
         self.layers = st["layers"]
         self.sel = None
         self.refresh_tree(0)
@@ -1775,6 +2012,10 @@ class App(tk.Tk):
         self.destroy()
 
 
+# units written into file names without non-ASCII characters
+FILE_UNIT_NAMES = {"µm": "um", "Å": "A"}
+
+
 def _dark(hex_color):
     r, g, b = (int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5))
     return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.5
@@ -1818,13 +2059,17 @@ HELP_TEXT = """1. Experiment tab: pump/probe wavelengths, fluence, pulse length,
    - optionally Ce, τ_ep, dñ/dTₑ for metals.
    'Fill from literature' pre-fills known materials; such values are
    marked ● lit. and reported as placeholders when you run.
+   'Literature values…' (or double-clicking a layer) lists them all.
 
 3. Run (F5). ΔR/R and the stack are always shown; tick Components,
    Kernels or Strain map for more plots. Use the toolbar (zoom, pan,
    home, save image), the mouse wheel to zoom, and 'Axes & labels…' to
    edit titles, labels, limits and scales.
 
-4. Thickness sweep tab: vary one layer and overlay the curves.
+4. Thickness sweep tab: pick a layer, give start, end and increment,
+   and optionally a folder and a file-name pattern (e.g.
+   dRR_{material}_{d}{unit}) to save one reflectivity file per
+   thickness plus one combined file.
 
 5. File menu: import a conf_file, save/open the whole session, export
    the selected run (.npz + .csv, with all inputs in the metadata) or a

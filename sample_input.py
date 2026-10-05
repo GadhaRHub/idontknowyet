@@ -197,6 +197,35 @@ def is_placeholder(lay, key):
                                 for f in fields)
 
 
+def placeholder_rows(layers):
+    """Every value that still holds its literature pre-fill, as
+    (layer number, material, quantity, value text, unit) rows."""
+    rows = []
+    for i, lay in enumerate(layers):
+        file_mode = lay["nk_mode"] == "file"
+        keys = [k for k in PROP_INFO
+                if not (k == "pe" and lay["pe_mode"] != "pe")
+                and not (k == "dn_deta" and lay["pe_mode"] == "pe")]
+        keys += (["kfill_pump", "kfill_probe"] if file_mode
+                 else ["k_pump", "k_probe"])
+        for key in keys:
+            if not is_placeholder(lay, key):
+                continue
+            if key in ("k_pump", "k_probe", "kfill_pump", "kfill_probe"):
+                w = key.split("_")[1]
+                label = (f"k at {w} (used only if the file has no k column)"
+                         if file_mode else f"k at {w}")
+                rows.append((i + 1, lay["material"], label, lay[key], ""))
+                continue
+            label = PROP_INFO[key][1]
+            if key in {p[0] for p in COMPLEX_PROPS}:
+                val = f"{lay[key + '_re'] or 0} + {lay[key + '_im'] or 0}i"
+            else:
+                val = lay[key]
+            rows.append((i + 1, lay["material"], label, val, lay[key + "_unit"]))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Parsing helpers
 # ---------------------------------------------------------------------------
@@ -219,6 +248,44 @@ def parse_thickness(lay):
         return U.to_base(float(lay["d"]), "thickness", lay["d_unit"])
     except (ValueError, KeyError):
         return None
+
+
+def range_values(start, end, step, max_n=10000):
+    """start, start+step, ... up to end (included when it lies on the grid).
+
+    Values are rounded to 10 significant digits so 0.1-steps do not give
+    names like 0.30000000000000004.
+    """
+    if step <= 0:
+        raise ValueError("the increment must be > 0")
+    if end < start:
+        raise ValueError("the end must be >= the start")
+    n = int(np.floor((end - start) / step + 1e-9)) + 1
+    if n > max_n:
+        raise ValueError(f"that gives {n} runs (more than {max_n})")
+    return [float(f"{start + i * step:.10g}") for i in range(n)]
+
+
+_BAD_FILE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+NAME_FIELDS = "{material} {layer} {d} {unit} {i} {n}"
+
+
+def format_name(template, **fields):
+    """Fill a file-name template such as 'dRR_{material}_{d}{unit}' and make
+    the result safe as a Windows/Linux file name. Raises ValueError for an
+    unknown {field}."""
+    try:
+        name = template.format(**fields)
+    except KeyError as e:
+        raise ValueError(f"unknown field {{{e.args[0]}}} in the file name; "
+                         f"use {NAME_FIELDS}") from None
+    except (IndexError, ValueError) as e:
+        raise ValueError(f"file name template: {e}") from None
+    name = _BAD_FILE_CHARS.sub("_", name).strip().rstrip(".")
+    if not name:
+        raise ValueError("the file name is empty")
+    return name
 
 
 def parse_value_list(text):

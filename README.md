@@ -76,10 +76,21 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   Ti, Si, Al, Au). Every field stays editable. A value that still equals its
   pre-fill is marked **● lit.** and reported as a literature placeholder when
   you run, and it is recorded as one in the exported metadata. n is never
-  pre-filled.
-- **Thickness sweep tab**: vary one layer's thickness. Give a list
-  (`100, 200, 350`) or a range (`100:600:100`, stop included) in any thickness
-  unit. The curves are overlaid.
+  pre-filled. *Literature values…* (or a double-click on a layer) lists
+  every value that is still a placeholder, with its unit, and can copy the
+  list to the clipboard. The list also opens after *Fill from literature*.
+- **Thickness sweep tab**: pick a layer and give a start, an end and an
+  increment in any thickness unit. The end is included when it falls on the
+  step grid, and the tab shows the resulting list of runs. The curves are
+  overlaid. To run many simulations unattended, tick *Save each run's
+  reflectivity file*, choose a folder and a file-name pattern such as
+  `dRR_{material}_{d}{unit}`. The fields are `{material}`, `{layer}`, `{d}`,
+  `{unit}`, `{i}` (run number) and `{n}` (number of runs). Each run is then
+  written as `.csv` + `.npz` as soon as it finishes, so a cancelled sweep
+  keeps what was done. Optionally one combined file holds all the
+  thicknesses (`{start}`, `{end}`, `{step}` are available for its name). The
+  tab previews the file names, refuses patterns that would give two runs the
+  same name, and asks before overwriting existing files.
 - **Plots**: the stack diagram and the total ΔR/R are always shown. Click a
   layer in the diagram to edit it. Tick *Components*, *Kernels & absorption*
   or *Strain map η(z,t)* for more tabs (the strain map must be ticked before
