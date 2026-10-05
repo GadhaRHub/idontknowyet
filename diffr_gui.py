@@ -17,7 +17,7 @@ import queue
 import threading
 import traceback
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, colorchooser
 from tkinter.scrolledtext import ScrolledText
 
 import numpy as np
@@ -404,6 +404,67 @@ class PlaceholderDialog(tk.Toplevel):
         self.clipboard_append("layer\tquantity\tvalue\tunit\n" + self.text)
 
 
+class StackColorDialog(tk.Toplevel):
+    """Pick the colour of each material in the stack diagram."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Stack colours")
+        self.transient(app)
+        self.resizable(False, False)
+        self.body = ttk.Frame(self, padding=10)
+        self.body.pack(fill="both", expand=True)
+        bb = ttk.Frame(self, padding=(10, 0, 10, 10))
+        bb.pack(fill="x")
+        ttk.Button(bb, text="Reset all to default", command=self.reset_all
+                   ).pack(side="left")
+        ttk.Button(bb, text="Close", command=self.destroy).pack(side="right")
+        self.build()
+
+    def build(self):
+        for w in self.body.winfo_children():
+            w.destroy()
+        names = list(dict.fromkeys(l["material"].strip() for l in self.app.layers))
+        ttk.Label(self.body, text="Colours are per material: layers of the "
+                  "same material share one.", foreground=INK2).grid(
+            row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+        for r, name in enumerate(names, 1):
+            col = self.app.material_color(name, names)
+            ttk.Label(self.body, text=name or "(unnamed)").grid(
+                row=r, column=0, sticky="w", padx=(0, 8))
+            sw = tk.Label(self.body, width=6, background=col, relief="solid",
+                          borderwidth=1, cursor="hand2")
+            sw.grid(row=r, column=1, pady=2)
+            sw.bind("<Button-1>", lambda e, n=name: self.pick(n))
+            ttk.Button(self.body, text="Change…",
+                       command=lambda n=name: self.pick(n)).grid(
+                row=r, column=2, padx=4)
+            state = "normal" if name in self.app.stack_colors else "disabled"
+            ttk.Button(self.body, text="Default", state=state,
+                       command=lambda n=name: self.reset(n)).grid(row=r, column=3)
+
+    def pick(self, name):
+        _, hexcol = colorchooser.askcolor(
+            color=self.app.material_color(name), parent=self,
+            title=f"Colour for {name}")
+        if hexcol:
+            self.app.stack_colors[name] = hexcol
+            self.changed()
+
+    def reset(self, name):
+        self.app.stack_colors.pop(name, None)
+        self.changed()
+
+    def reset_all(self):
+        self.app.stack_colors.clear()
+        self.changed()
+
+    def changed(self):
+        self.app.draw_stack()
+        self.build()
+
+
 # ---------------------------------------------------------------------------
 # The application
 # ---------------------------------------------------------------------------
@@ -436,6 +497,7 @@ class App(tk.Tk):
         self.overlay = tk.BooleanVar(value=False)
         self.scale_exp = tk.StringVar(value="3")
         self.stack_mode = tk.StringVar(value="Equal widths")
+        self.stack_colors = {}          # material name -> "#rrggbb" chosen by the user
         self.view_run = tk.StringVar()
 
         self._build_menu()
@@ -1138,7 +1200,7 @@ class App(tk.Tk):
                "  {n}         number of runs\n"
                ".csv and .npz are added automatically.")
         Tooltip(lab, tip)
-        self.sweep_combined = tk.BooleanVar(value=True)
+        self.sweep_combined = tk.BooleanVar(value=False)
         ttk.Checkbutton(o, text="Also save all thicknesses in one combined file:",
                         variable=self.sweep_combined).grid(
             row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
@@ -1296,6 +1358,11 @@ class App(tk.Tk):
                           values=["Equal widths", "Proportional", "Log thickness"])
         cb.pack(side="left", padx=2)
         cb.bind("<<ComboboxSelected>>", lambda e: self.draw_stack())
+        b = ttk.Button(self.stack_panel.controls, text="Colours…",
+                       command=self.edit_stack_colors)
+        b.pack(side="left", padx=(6, 0))
+        Tooltip(b, "Choose the colour of each material in the stack diagram. "
+                   "Layers of the same material share a colour.")
         self.stack_panel.canvas.mpl_connect("button_press_event", self._on_stack_click)
 
         self.drr_panel = PlotPanel(main, figsize=(8, 4.5))
@@ -1368,7 +1435,7 @@ class App(tk.Tk):
         self._stack_x = []
         for i, (lay, w) in enumerate(zip(self.layers, widths)):
             name = lay["material"].strip() or "?"
-            col = SERIES[order.index(lay["material"].strip()) % len(SERIES)]
+            col = self.material_color(lay["material"].strip(), order)
             sub = i == len(self.layers) - 1
             ax.add_patch(Rectangle((x, 0), w, 1, facecolor=col, alpha=.85,
                                    edgecolor="white", lw=2,
@@ -1412,6 +1479,17 @@ class App(tk.Tk):
                      f"{sum(d for d in ds if d):g} nm above the substrate; "
                      f"widths: {mode.lower()})")
         p.finish()
+
+    def material_color(self, name, order=None):
+        """The user's colour for a material, else the default palette slot."""
+        if name in self.stack_colors:
+            return self.stack_colors[name]
+        order = order or list(dict.fromkeys(l["material"].strip()
+                                            for l in self.layers))
+        return SERIES[order.index(name) % len(SERIES)] if name in order else SERIES[0]
+
+    def edit_stack_colors(self):
+        StackColorDialog(self)
 
     def _on_stack_click(self, e):
         if e.inaxes is None or e.xdata is None or self.stack_panel.toolbar.mode:
@@ -1838,6 +1916,7 @@ class App(tk.Tk):
                                kernels=self.show_kernels.get(),
                                strain=self.show_strain.get(),
                                stack_mode=self.stack_mode.get(),
+                               stack_colors=self.stack_colors,
                                scale_exp=self.scale_exp.get(),
                                overlay=self.overlay.get()),
                     sweep=dict(layer=self.sweep_layer.get(),
@@ -1864,6 +1943,7 @@ class App(tk.Tk):
         self.show_kernels.set(pl.get("kernels", False))
         self.show_strain.set(pl.get("strain", False))
         self.stack_mode.set(pl.get("stack_mode", "Equal widths"))
+        self.stack_colors = dict(pl.get("stack_colors", {}))
         self.scale_exp.set(pl.get("scale_exp", "3"))
         self.overlay.set(pl.get("overlay", False))
         sw = st.get("sweep", {})

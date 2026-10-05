@@ -92,7 +92,9 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   tab previews the file names, refuses patterns that would give two runs the
   same name, and asks before overwriting existing files.
 - **Plots**: the stack diagram and the total ΔR/R are always shown. Click a
-  layer in the diagram to edit it. Tick *Components*, *Kernels & absorption*
+  layer in the diagram to edit it. *Colours…* above the diagram sets the
+  colour of each material (layers of the same material share one); the
+  colours are saved with the session. Tick *Components*, *Kernels & absorption*
   or *Strain map η(z,t)* for more tabs (the strain map must be ticked before
   the run). Every plot has the matplotlib toolbar (zoom, pan, home, back,
   save image), mouse-wheel zoom, and *Axes & labels…* for the title, axis
