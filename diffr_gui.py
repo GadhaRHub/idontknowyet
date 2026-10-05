@@ -674,8 +674,12 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("diffR thin-film model")
-        self.geometry("1560x940")
-        self.minsize(1100, 700)
+        # fit the window to the screen (laptops, display scaling)
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        W, H = min(1560, sw - 40), min(940, sh - 90)
+        self.geometry(f"{W}x{H}+10+10")
+        self.minsize(min(900, W), min(560, H))
+        left_w = max(420, min(700, int(W * 0.45)))
         self.cache = S.DispersionCache()
         self.layers, self.sel, self._loading = [], None, False
         self.batches, self.run_counter = [], 0
@@ -702,28 +706,36 @@ class App(tk.Tk):
             ttk.Style(self).configure("Sash", sashthickness=7)
         except tk.TclError:
             pass
-        outer = ttk.PanedWindow(self, orient="horizontal")
+        # A tk (not ttk) PanedWindow: each side has a minimum width, so the
+        # controls can never be squeezed to nothing; drag the divider to resize.
+        outer = tk.PanedWindow(self, orient="horizontal", sashwidth=8,
+                               sashrelief="raised", showhandle=False,
+                               borderwidth=0, opaqueresize=True)
         outer.pack(fill="both", expand=True)
-        left = ttk.PanedWindow(outer, orient="vertical")
+        leftc = ttk.Frame(outer)
         right = ttk.Frame(outer)
-        outer.add(left, weight=0)
-        outer.add(right, weight=1)
+        outer.add(leftc, minsize=380, width=left_w, stretch="never")
+        outer.add(right, minsize=380, stretch="always")
         self.outer = outer
+        # the Run bar is packed first, at the bottom, so it is always visible
+        # however small the window
+        self._build_run_bar(leftc)
+        left = ttk.PanedWindow(leftc, orient="vertical")
+        left.pack(fill="both", expand=True)
 
         top = ttk.Frame(left)
         left.add(top, weight=3)
-        self.tabs = ttk.Notebook(top, width=620)
+        self.tabs = ttk.Notebook(top, width=left_w - 20)
         self.tabs.pack(fill="both", expand=True)
         self._build_experiment_tab()
         self._build_layers_tab()
         self._build_sweep_tab()
         self._build_output_tab()
-        self._build_run_bar(top)
         logf = ttk.Frame(left)
         left.add(logf, weight=1)
         ttk.Label(logf, text="Log: conversions to model units, warnings, "
                   "run diagnostics").pack(anchor="w", padx=4)
-        self.log_w = ScrolledText(logf, height=12, wrap="none",
+        self.log_w = ScrolledText(logf, height=8, wrap="none",
                                   font=("Courier", 9))
         self.log_w.pack(fill="both", expand=True)
         self.log_w.tag_configure("warn", foreground=LIT_C)
@@ -739,8 +751,6 @@ class App(tk.Tk):
             u.trace_add("write", lambda *_: self.schedule_preview())
         self.show_strain.trace_add("write", lambda *_: self.schedule_preview())
         self.load_example()
-        # start with room for the controls; the divider can be dragged
-        self.after(80, lambda: self.outer.sashpos(0, 700))
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(100, self._poll)
 
@@ -1750,7 +1760,7 @@ class App(tk.Tk):
     # --------------------------------------------------------------- run bar
     def _build_run_bar(self, parent):
         f = ttk.Frame(parent, padding=(4, 6))
-        f.pack(fill="x")
+        f.pack(side="bottom", fill="x")
         self.run_btn = ttk.Button(f, text="▶ Run model (F5)", command=self.run_single)
         self.run_btn.pack(side="left")
         self.cancel_btn = ttk.Button(f, text="Cancel", command=self.cancel,
