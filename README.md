@@ -5,7 +5,7 @@ differential-reflectivity forward model in
 `diffR_thinfilm_model_custom.ipynb`.
 
 ```
-pip install -r requirements.txt     # numpy, matplotlib (tkinter ships with Python)
+pip install -r requirements.txt     # numpy, matplotlib, scipy (tkinter ships with Python)
 python diffr_gui.py
 ```
 
@@ -15,6 +15,8 @@ python diffr_gui.py
 |---|---|
 | `diffr_gui.py` | The GUI. Run this. |
 | `sample_input.py` | Turns what the user typed (numbers + units) into model units, builds the sample, imports conf files, saves/loads sessions. No GUI code. |
+| `background.py` | Double-exponential background subtraction: `minus_exp_fun_single3` (unchanged) plus the wrapper the GUI uses. Needs scipy. |
+| `param_import.py` | Reads parameter files (`CFG = dict(...)`, `SAMPLE = [...]`, `LITERATURE = {...}`) without executing them. |
 | `outputs.py` | Writes results the way the Output tab says (CSV, NPZ, metadata JSON) and estimates file counts, sizes and run times. No GUI code. |
 | `units.py` | The unit menus and conversion factors. |
 | `diffr_model.py` | The physics, taken unchanged from the notebook (TMM, absorption, sensitivity kernels, leapfrog solver, save/plot). |
@@ -89,6 +91,25 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   and the estimated time. Before the sweep starts, the same summary is shown
   for confirmation. The time estimate uses the speed of the last run, so it
   appears once one run has been timed.
+- **Background tab**: subtracts a double-exponential background,
+  f(t) = a·e^(b·t) + c·e^(d·t), from every run with `minus_exp_fun_single3`.
+  - When you switch it on, you are asked whether to fit only delays after a
+    cut-off (and which one, in fs/ps/ns) or the whole time axis. Both can be
+    changed in the tab later.
+  - Other settings: force decaying exponentials (b, d ≤ 0), and what the
+    subtracted column holds before the cut-off (empty/NaN, the original
+    ΔR/R, or the extrapolated fit subtracted).
+  - The result is written next to the original in the same ΔR/R file:
+    `dR_over_R_minus_bg` and optionally `bg_fit`. The NPZ holds
+    `drr_minus_bg`, `bg_fit` and `bg_params`, and the metadata JSON holds
+    a, b, c, d (b, d in 1/ps) and the settings. A combined sweep file gets
+    one `dR_over_R_minus_bg_d=…` column per thickness.
+  - The fit parameters are printed in the log and in the tab ("Exponential
+    fit params: a=…, b=…, c=…, d=…", or "fit failed — mean subtracted
+    instead"). A *Background* plot tab shows data, fit and subtracted trace.
+    The main ΔR/R plot can show the original, the subtracted trace, or both.
+  - *Fit selected run now* / *Re-fit all runs* apply changed settings to
+    runs already in memory. Files already saved are not rewritten.
 - **Output tab**: everything about saving, all of it kept in the session.
   - *Where*: the output folder.
   - *When*: save automatically after every single run, after every run of a

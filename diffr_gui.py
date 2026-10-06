@@ -30,6 +30,10 @@ from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg,
                                                NavigationToolbar2Tk)
 
 import diffr_model as M
+try:
+    import background as B          # needs scipy
+except ImportError as _e:           # the rest of the GUI works without it
+    B, BG_IMPORT_ERROR = None, str(_e)
 import outputs as O
 import param_import as PI
 import sample_input as S
@@ -662,6 +666,62 @@ class StackColorDialog(tk.Toplevel):
         self.build()
 
 
+class CutoffDialog(tk.Toplevel):
+    """Asked when background subtraction is switched on: fit only after a
+    delay, or the whole trace?"""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app, self.ok = app, False
+        ov = app.out
+        self.title("Background subtraction — fit range")
+        self.transient(app)
+        self.resizable(False, False)
+        f = ttk.Frame(self, padding=12)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, wraplength=420, justify="left", text=(
+            "Should the double-exponential background be fitted only to "
+            "delays after a cut-off (e.g. to leave out the electronic peak "
+            "around t = 0)?")).grid(row=0, column=0, columnspan=4, sticky="w")
+        self.use = tk.BooleanVar(value=ov["bg_use_cut"].get())
+        self.cut = tk.StringVar(value=ov["bg_cut"].get())
+        self.unit = tk.StringVar(value=ov["bg_cut_unit"].get())
+        ttk.Radiobutton(f, text="Yes, only delays after", variable=self.use,
+                        value=True).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        e = ttk.Entry(f, textvariable=self.cut, width=8)
+        e.grid(row=1, column=1, sticky="w", pady=(8, 0))
+        ttk.Combobox(f, textvariable=self.unit, width=5, state="readonly",
+                     values=U.choices("time")).grid(row=1, column=2, sticky="w",
+                                                    padx=2, pady=(8, 0))
+        ttk.Radiobutton(f, text="No, fit the whole time axis", variable=self.use,
+                        value=False).grid(row=2, column=0, columnspan=3,
+                                          sticky="w", pady=(4, 0))
+        self.msg = ttk.Label(f, foreground="#c00000")
+        self.msg.grid(row=3, column=0, columnspan=4, sticky="w")
+        bb = ttk.Frame(f)
+        bb.grid(row=4, column=0, columnspan=4, sticky="e", pady=(8, 0))
+        ttk.Button(bb, text="OK", command=self.accept).pack(side="left", padx=4)
+        ttk.Button(bb, text="Cancel", command=self.destroy).pack(side="left")
+        e.focus_set()
+        self.bind("<Return>", lambda ev: self.accept())
+        self.grab_set()
+        self.wait_window()
+
+    def accept(self):
+        if self.use.get():
+            try:
+                float(self.cut.get())
+            except ValueError:
+                self.msg.config(text="Enter the cut-off delay as a number.")
+                return
+        ov = self.app.out
+        ov["bg_use_cut"].set(self.use.get())
+        ov["bg_cut"].set(self.cut.get())
+        ov["bg_cut_unit"].set(self.unit.get())
+        self.ok = True
+        self.destroy()
+
+
 class ImportReviewDialog(tk.Toplevel):
     """Shows everything read from a parameter file, where each value came
     from, and what is missing, before it replaces the current inputs."""
@@ -846,6 +906,12 @@ class App(tk.Tk):
         self._build_experiment_tab()
         self._build_layers_tab()
         self._build_sweep_tab()
+        self.out = {}                   # Output + Background settings
+        for k, v in O.default_options().items():
+            self.out[k] = (tk.BooleanVar(value=v) if isinstance(v, bool)
+                           else tk.StringVar(value=v))
+            self.out[k].trace_add("write", lambda *_: self.schedule_preview())
+        self._build_background_tab()
         self._build_output_tab()
         logf = ttk.Frame(left)
         left.add(logf, weight=1)
@@ -1548,17 +1614,191 @@ class App(tk.Tk):
                   self.sweep_step, self.sweep_unit):
             v.trace_add("write", lambda *_: self.schedule_preview())
 
+    # ------------------------------------------------------------ background
+    def _build_background_tab(self):
+        sf = ScrollableFrame(self.tabs)
+        self.tabs.add(sf, text="Background")
+        self.bg_tab = sf
+        tab = sf.inner
+        ov = self.out
+        ttk.Label(tab, wraplength=560, justify="left", foreground=INK2, text=(
+            "Fit a double-exponential background  f(t) = a·e^(b·t) + c·e^(d·t)  "
+            "to each ΔR/R trace (minus_exp_fun_single3) and subtract it. The "
+            "result is written as an extra column next to the original ΔR/R "
+            "in the same file, so both can be used. t is in ps, so b and d "
+            "are in 1/ps.")).grid(row=0, column=0, sticky="w", padx=8,
+                                  pady=(6, 2))
+        if B is None:
+            ttk.Label(tab, foreground="#c00000", wraplength=560, text=(
+                f"Background subtraction needs scipy ({BG_IMPORT_ERROR}). "
+                f"Install it with  pip install scipy  and restart.")).grid(
+                row=1, column=0, sticky="w", padx=8)
+            return
+        g = section(tab, "Subtraction", 1)
+        ttk.Checkbutton(g, text="Subtract the background from every run",
+                        variable=ov["bg_enabled"],
+                        command=self._on_bg_toggle).grid(
+            row=0, column=0, columnspan=4, sticky="w")
+        ttk.Checkbutton(g, text="Fit only delays after a cut-off:",
+                        variable=ov["bg_use_cut"]).grid(
+            row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(g, textvariable=ov["bg_cut"], width=8).grid(
+            row=1, column=1, sticky="w", padx=2, pady=(6, 0))
+        ttk.Combobox(g, textvariable=ov["bg_cut_unit"], width=5,
+                     state="readonly", values=U.choices("time")).grid(
+            row=1, column=2, sticky="w", pady=(6, 0))
+        self.bg_cut_conv = ttk.Label(g, foreground=INK2)
+        self.bg_cut_conv.grid(row=1, column=3, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(g, foreground=INK2, text="(untick to fit the whole time axis, "
+                  "including negative delays)").grid(row=2, column=0,
+                                                     columnspan=4, sticky="w")
+        ttk.Checkbutton(g, text="Force decaying exponentials (b ≤ 0, d ≤ 0)",
+                        variable=ov["bg_force_decay"]).grid(
+            row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Label(g, text="Before the cut-off the subtracted column holds").grid(
+            row=4, column=0, sticky="w", pady=(6, 0))
+        ttk.Combobox(g, textvariable=ov["bg_before"], width=26, state="readonly",
+                     values=list(B.BEFORE_CHOICES)).grid(
+            row=4, column=1, columnspan=3, sticky="w", pady=(6, 0))
+
+        c = section(tab, "In the ΔR/R file and the plots", 2)
+        ttk.Label(c, text="Extra columns next to dR_over_R:").grid(
+            row=0, column=0, columnspan=3, sticky="w")
+        ttk.Checkbutton(c, text="dR_over_R_minus_bg (ΔR/R − background)",
+                        variable=ov["bg_col_sub"]).grid(row=1, column=0,
+                                                        sticky="w", padx=(18, 0))
+        ttk.Checkbutton(c, text="bg_fit (the fitted background)",
+                        variable=ov["bg_col_fit"]).grid(row=2, column=0,
+                                                        sticky="w", padx=(18, 0))
+        ttk.Label(c, foreground=INK2, wraplength=520, justify="left", text=(
+            "The NPZ archive always holds drr_minus_bg, bg_fit and bg_params; "
+            "the metadata JSON holds a, b, c, d and the settings used. A "
+            "combined sweep file gets one dR_over_R_minus_bg column per "
+            "thickness.")).grid(row=3, column=0, columnspan=3, sticky="w",
+                                pady=(2, 6))
+        ttk.Label(c, text="Main ΔR/R plot shows").grid(row=4, column=0, sticky="w")
+        cb = ttk.Combobox(c, textvariable=ov["bg_plot_main"], width=24,
+                          state="readonly", values=["original ΔR/R",
+                                                    "background-subtracted",
+                                                    "both"])
+        cb.grid(row=4, column=1, sticky="w", padx=4)
+        cb.bind("<<ComboboxSelected>>", lambda e: self.draw_drr())
+
+        r = section(tab, "Result", 3)
+        self.bg_result = ttk.Label(r, foreground=INK2, wraplength=540,
+                                   justify="left", text="No run yet.")
+        self.bg_result.grid(row=0, column=0, columnspan=3, sticky="w")
+        bf = ttk.Frame(r)
+        bf.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Button(bf, text="Fit selected run now",
+                   command=lambda: self.refit_background(all_runs=False)).pack(
+            side="left")
+        ttk.Button(bf, text="Re-fit all runs",
+                   command=lambda: self.refit_background(all_runs=True)).pack(
+            side="left", padx=6)
+        ttk.Label(r, foreground=INK2, wraplength=540, justify="left", text=(
+            "New runs are fitted automatically while 'Subtract' is on. After "
+            "changing settings, re-fit here; files that were already saved are "
+            "not rewritten (use File → Export to write them again).")).grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        for k in ("bg_cut", "bg_cut_unit", "bg_use_cut"):
+            ov[k].trace_add("write", lambda *_: self._update_bg_cut_label())
+        ov["bg_enabled"].trace_add("write", lambda *_: self._update_plot_tabs())
+        self._update_bg_cut_label()
+
+    def _bg_settings(self, opts=None):
+        """Settings for background.apply(), or None when switched off.
+        Raises ValueError for an unusable cut-off."""
+        opts = opts or self._opts()
+        if not opts.get("bg_enabled") or B is None:
+            return None
+        cut = 0.0
+        if opts["bg_use_cut"]:
+            try:
+                cut = U.to_base(float(opts["bg_cut"]), "time", opts["bg_cut_unit"])
+            except ValueError:
+                raise ValueError("Background tab: the cut-off delay must be a "
+                                 "number (or untick 'Fit only delays after a "
+                                 "cut-off').")
+        return dict(use_cut=bool(opts["bg_use_cut"]), cut_ps=cut,
+                    force_decay=bool(opts["bg_force_decay"]),
+                    before=B.BEFORE_CHOICES.get(opts["bg_before"], "nan"))
+
+    def _update_bg_cut_label(self):
+        if not hasattr(self, "bg_cut_conv"):
+            return
+        try:
+            s = self._bg_settings(dict(self._opts(), bg_enabled=True))
+            self.bg_cut_conv.config(
+                text=(f"= {s['cut_ps']:g} ps" if s["use_cut"] else "not used"),
+                foreground=INK2)
+        except ValueError:
+            self.bg_cut_conv.config(text="not a number", foreground="#c00000")
+
+    def _on_bg_toggle(self):
+        """Switching subtraction on asks whether to fit only after a delay."""
+        if self.out["bg_enabled"].get() and not CutoffDialog(self).ok:
+            self.out["bg_enabled"].set(False)
+
+    def _bg_res_text(self, res):
+        if res is None:
+            return "No run selected."
+        if res.get("bg_error"):
+            return f"Background fit could not be done: {res['bg_error']}"
+        bg = res.get("bg")
+        if not bg:
+            return ("The selected run has no background fit. Press 'Fit "
+                    "selected run now'.")
+        rng = (f"delays > {bg['cut_ps']:g} ps" if bg["cut_ps"] is not None
+               else "the whole time axis")
+        return (f"{self.view_run.get()}: fitted on {rng} ({bg['n_points']} "
+                f"points).\n{B.describe(bg)}")
+
+    def _update_bg_result(self):
+        if hasattr(self, "bg_result"):
+            self.bg_result.config(text=self._bg_res_text(self.selected_res()))
+
+    def refit_background(self, all_runs=False):
+        if B is None:
+            return
+        try:
+            st = self._bg_settings(dict(self._opts(), bg_enabled=True))
+        except ValueError as e:
+            messagebox.showerror("Background", str(e))
+            return
+        runs = self.all_runs() if all_runs else [
+            r for r in self.all_runs() if r["label"] == self.view_run.get()]
+        if not runs:
+            messagebox.showinfo("Background", "No run to fit yet.")
+            return
+        self.config(cursor="watch")
+        self.update_idletasks()
+        try:
+            for r in runs:
+                self._fit_background(r["res"], st)
+                self.log(f"{r['label']}: " + (B.describe(r["res"]["bg"])
+                         if r["res"].get("bg") else r["res"]["bg_error"]))
+        finally:
+            self.config(cursor="")
+        self.draw_drr()
+        self.redraw_run_plots()
+        self._update_bg_result()
+
+    @staticmethod
+    def _fit_background(res, st):
+        res.pop("bg", None)
+        res.pop("bg_error", None)
+        try:
+            res["bg"] = B.apply(res["t_ps"], res["drr"], **st)
+        except Exception as e:
+            res["bg_error"] = str(e)
+
     # ---------------------------------------------------------------- output
     def _build_output_tab(self):
         sf = ScrollableFrame(self.tabs)
         self.tabs.add(sf, text="Output")
         self.output_tab = sf
         tab = sf.inner
-        self.out = {}
-        for k, v in O.default_options().items():
-            self.out[k] = (tk.BooleanVar(value=v) if isinstance(v, bool)
-                           else tk.StringVar(value=v))
-            self.out[k].trace_add("write", lambda *_: self.schedule_preview())
         ov = self.out
 
         w = section(tab, "Where", 0)
@@ -1984,6 +2224,7 @@ class App(tk.Tk):
                                    state="readonly")
         self.run_cb.pack(side="left", padx=4)
         self.run_cb.bind("<<ComboboxSelected>>", lambda e: self.redraw_run_plots())
+        self.view_run.trace_add("write", lambda *_: self._update_bg_result())
         ttk.Checkbutton(bar, text="Overlay all runs", variable=self.overlay,
                         command=self.draw_drr).pack(side="left", padx=6)
         ttk.Button(bar, text="Clear runs", command=self.clear_runs).pack(side="left")
@@ -2035,13 +2276,22 @@ class App(tk.Tk):
         self.ptabs.add(self.comp_panel, text="Components")
         self.ptabs.add(self.kern_panel, text="Kernels & absorption")
         self.ptabs.add(self.strain_panel, text="Strain map")
+        self.bg_panel = PlotPanel(self.ptabs)
+        self.bg_panel.redraw = self.draw_background
+        self.ptabs.add(self.bg_panel, text="Background")
         self._update_plot_tabs()
         self.draw_drr()
 
+    def _bg_shown(self):
+        return hasattr(self, "out") and self.out["bg_enabled"].get()
+
     def _update_plot_tabs(self):
+        if not hasattr(self, "bg_panel"):
+            return
         for var, panel in ((self.show_components, self.comp_panel),
                            (self.show_kernels, self.kern_panel),
-                           (self.show_strain, self.strain_panel)):
+                           (self.show_strain, self.strain_panel),
+                           (self.out["bg_enabled"], self.bg_panel)):
             if var.get():
                 self.ptabs.add(panel)          # re-shows a hidden tab
                 panel.redraw()
@@ -2184,19 +2434,32 @@ class App(tk.Tk):
         exp = int(self.scale_exp.get())
         sweep = len(batches) == 1 and batches[0]["kind"] == "sweep"
         ax = p.clear().add_subplot()
+        mode = self.out["bg_plot_main"].get() if self._bg_shown() else "original ΔR/R"
+        n_sub = 0
         for r, c in zip(runs, self._run_colors(runs, sweep)):
             res = r["res"]
-            ax.plot(res["t_ps"], res["drr"] * 10 ** exp, color=c, lw=1.2,
-                    label=r["label"])
+            bg = res.get("bg")
+            if mode == "original ΔR/R" or not bg:
+                ax.plot(res["t_ps"], res["drr"] * 10 ** exp, color=c, lw=1.2,
+                        label=r["label"])
+                continue
+            n_sub += 1
+            if mode == "both":
+                ax.plot(res["t_ps"], res["drr"] * 10 ** exp, color=c, lw=.9,
+                        alpha=.45, label=r["label"])
+            ax.plot(res["t_ps"], bg["sub"] * 10 ** exp, color=c, lw=1.2,
+                    label=r["label"] + " − bg" if mode == "both" else r["label"])
         tmax = max(r["res"]["t_ps"].max() for r in runs)
         ax.set_xlim(0, tmax)
         ax.axhline(0, color=GRID_C, lw=.8, zorder=0, gid="ref")
         ax.set_xlabel("delay (ps)")
         ax.set_ylabel(drr_label(exp))
         ax.set_title("Modelled differential reflectivity"
-                     + (f" — sweep of {batches[0]['info']}" if sweep else ""))
+                     + (f" — sweep of {batches[0]['info']}" if sweep else "")
+                     + (" — background subtracted" if n_sub and mode ==
+                        "background-subtracted" else ""))
         ax.grid(alpha=.6)
-        if len(runs) > 1:
+        if len(runs) > 1 or (n_sub and mode == "both"):
             ax.legend(fontsize=8, ncols=2 if len(runs) > 8 else 1).set_draggable(True)
         p.finish()
 
@@ -2283,9 +2546,43 @@ class App(tk.Tk):
     def redraw_run_plots(self):
         for var, panel in ((self.show_components, self.comp_panel),
                            (self.show_kernels, self.kern_panel),
-                           (self.show_strain, self.strain_panel)):
+                           (self.show_strain, self.strain_panel),
+                           (self.out["bg_enabled"], self.bg_panel)):
             if var.get():
                 panel.redraw()
+        self._update_bg_result()
+
+    def draw_background(self):
+        p = self.bg_panel
+        res = self.selected_res()
+        if res is None:
+            p.empty("Run the model to see the background fit.")
+            return
+        bg = res.get("bg")
+        if not bg:
+            p.empty(self._bg_res_text(res))
+            return
+        exp = int(self.scale_exp.get())
+        k = 10 ** exp
+        ax = p.clear().add_subplot()
+        t = res["t_ps"]
+        ax.plot(t, res["drr"] * k, color=SERIES[0], lw=1.2, label="data (ΔR/R)")
+        ax.plot(t, bg["fit"] * k, color=SERIES[1], lw=1.4, ls="--",
+                label="fitted background" if bg["params"] is not None
+                else "mean (fit failed)")
+        ax.plot(t, bg["sub"] * k, color=INK, lw=1.2, label="ΔR/R − background")
+        if bg["cut_ps"] is not None:
+            ax.axvline(bg["cut_ps"], color=INK2, lw=.8, ls=":", gid="ref")
+        ax.axhline(0, color=GRID_C, lw=.8, zorder=0, gid="ref")
+        ax.set_xlim(t[0], t[-1])
+        ax.set_xlabel("delay (ps)")
+        ax.set_ylabel(drr_label(exp))
+        ax.set_title(f"Exponential background subtraction — {self.view_run.get()}"
+                     + (f"  (fit on t > {bg['cut_ps']:g} ps, dotted line)"
+                        if bg["cut_ps"] is not None else ""))
+        ax.grid(alpha=.6)
+        ax.legend(fontsize=8).set_draggable(True)
+        p.finish()
 
     def _refresh_run_list(self, select_last=True):
         labels = [r["label"] for r in self.all_runs()]
@@ -2354,6 +2651,11 @@ class App(tk.Tk):
         if self._busy():
             return
         try:
+            self._bg_settings()
+        except ValueError as e:
+            messagebox.showerror("Background", str(e))
+            return
+        try:
             plan = self._single_plan()
         except ValueError as e:
             messagebox.showerror("Output settings", str(e))
@@ -2383,6 +2685,11 @@ class App(tk.Tk):
 
     def run_sweep(self):
         if self._busy():
+            return
+        try:
+            self._bg_settings()
+        except ValueError as e:
+            messagebox.showerror("Background", str(e))
             return
         try:
             p = self._sweep_plan()
@@ -2436,8 +2743,12 @@ class App(tk.Tk):
         self.run_btn.config(state="disabled")
         self.cancel_btn.config(state="normal")
         self.pbar["value"] = 0
+        opts = self._opts()
+        st = self._bg_settings(opts)            # validated by the callers
+        for job in jobs:
+            job["bg_settings"] = st
         self._pending = dict(batch, runs=[], n_jobs=len(jobs),
-                             opts=self._opts(), t0=time.perf_counter())
+                             opts=opts, t0=time.perf_counter())
         self.worker = threading.Thread(target=self._work, args=(jobs,), daemon=True)
         self.worker.start()
 
@@ -2459,6 +2770,8 @@ class App(tk.Tk):
                 self.queue.put(("error", traceback.format_exc(), job["label"]))
                 return
             job["elapsed"] = time.perf_counter() - t0
+            if job.get("bg_settings"):
+                self._fit_background(res, job["bg_settings"])
             self.queue.put(("one", job, res))
         self.queue.put(("done", None, None))
 
@@ -2479,6 +2792,11 @@ class App(tk.Tk):
                     self.log(f"{a['label']} finished in "
                              f"{fmt_duration(a['elapsed'])}")
                     self.log(M.run_summary(b))
+                    if b.get("bg"):
+                        self.log("  background: " + B.describe(b["bg"]))
+                    elif b.get("bg_error"):
+                        self.log("  background fit not possible: "
+                                 + b["bg_error"], "warn")
                     if a.get("save_base"):
                         self._save_run(a, a["save_base"], self._pending["opts"])
                 elif kind in ("done", "cancelled", "error"):
@@ -2562,7 +2880,8 @@ class App(tk.Tk):
         if opts["fig_extra"] and extra:
             for var, key in ((self.show_components, "components"),
                              (self.show_kernels, "kernels"),
-                             (self.show_strain, "strain_map")):
+                             (self.show_strain, "strain_map"),
+                             (self.out["bg_enabled"], "background")):
                 if var.get():
                     panels.append((key, FIGURE_PANELS_MAP(self)[key]))
         try:
@@ -2866,13 +3185,14 @@ class App(tk.Tk):
 
 
 # figure-file suffix -> panel, for saving figures and plot styles
-FIGURE_PANELS = ("dRR", "stack", "components", "kernels", "strain_map")
+FIGURE_PANELS = ("dRR", "stack", "components", "kernels", "strain_map",
+                 "background")
 
 
 def FIGURE_PANELS_MAP(app):
     return {"dRR": app.drr_panel, "stack": app.stack_panel,
             "components": app.comp_panel, "kernels": app.kern_panel,
-            "strain_map": app.strain_panel}
+            "strain_map": app.strain_panel, "background": app.bg_panel}
 
 
 def fmt_duration(sec):

@@ -45,6 +45,10 @@ def default_options():
         figures=False, fig_format="png", fig_dpi="150", fig_drr=True,
         fig_stack=False, fig_extra=False,
         ask_overwrite=True,
+        # background subtraction (Background tab)
+        bg_enabled=False, bg_use_cut=True, bg_cut="10", bg_cut_unit="ps",
+        bg_force_decay=True, bg_before="NaN (empty)", bg_col_sub=True,
+        bg_col_fit=False, bg_plot_main="original ΔR/R",
     )
 
 
@@ -93,7 +97,21 @@ def run_meta(res, label, inputs, elapsed=None):
                 placeholders=M.placeholder_summary(res.get("materials", {})),
                 materials_model_units=S.materials_as_json(res["stack"],
                                                           res["materials"]),
+                background=bg_meta(res),
                 gui_inputs=inputs)
+
+
+def bg_meta(res):
+    """Background-subtraction settings and result of a run, or None."""
+    bg = res.get("bg")
+    if not bg:
+        return None if not res.get("bg_error") else dict(error=res["bg_error"])
+    p = bg["params"]
+    return dict(model="a*exp(b*t) + c*exp(d*t), t in ps",
+                params=None if p is None else dict(zip("abcd", p)),
+                fit_failed_mean_subtracted=p is None,
+                fit_only_after_ps=bg["cut_ps"], points_used=bg["n_points"],
+                force_decay=bg["force_decay"], before_cutoff=bg["before"])
 
 
 def _csv(path, cols, names, opts):
@@ -115,6 +133,13 @@ def write_run(res, base, opts, meta):
             if opts[opt]:
                 cols.append(res[key])
                 names.append(name)
+        if res.get("bg"):
+            if opts.get("bg_col_sub", True):
+                cols.append(res["bg"]["sub"])
+                names.append("dR_over_R_minus_bg")
+            if opts.get("bg_col_fit"):
+                cols.append(res["bg"]["fit"])
+                names.append("bg_fit")
         _csv(base + ".csv", cols, names, opts)
         files.append(base + ".csv")
     if opts["npz"]:
@@ -124,6 +149,10 @@ def write_run(res, base, opts, meta):
         if opts["npz_profiles"]:
             payload.update(z_nm=res["z_nm"], f_eta=res["f_eta"], f_T=res["f_T"],
                            W=res["W"])
+        if res.get("bg"):
+            p = res["bg"]["params"]
+            payload.update(drr_minus_bg=res["bg"]["sub"], bg_fit=res["bg"]["fit"],
+                           bg_params=np.array(p if p is not None else [np.nan] * 4))
         if opts["npz_strain"] and res.get("eta_zt") is not None:
             payload.update(eta_zt=res["eta_zt"], eta_z_nm=res["eta_z_nm"],
                            eta_t_ps=res["eta_t_ps"])
@@ -146,17 +175,30 @@ def write_sweep(runs, base, opts, info):
     names = [f"t_{tu}"] + [f"dR_over_R_d={r['sweep_value']:g}"
                            f"{S.FILE_UNIT_NAMES.get(r['sweep_unit'], r['sweep_unit'])}"
                            for r in runs]
+    has_bg = all(r["res"].get("bg") for r in runs)
+    data = [t * TIME_UNITS[tu], cols("drr")]
+    if has_bg and opts.get("bg_col_sub", True):
+        data.append(np.column_stack([r["res"]["bg"]["sub"] for r in runs]))
+        names += [n.replace("dR_over_R_", "dR_over_R_minus_bg_")
+                  for n in names[1:len(runs) + 1]]
     if opts["csv"] or not opts["npz"]:
-        _csv(base + ".csv", [t * TIME_UNITS[tu], cols("drr")], names, opts)
+        _csv(base + ".csv", data, names, opts)
         files.append(base + ".csv")
     if opts["npz"]:
+        extra = {}
+        if has_bg:
+            extra = dict(drr_minus_bg=np.column_stack([r["res"]["bg"]["sub"]
+                                                       for r in runs]),
+                         bg_fit=np.column_stack([r["res"]["bg"]["fit"]
+                                                 for r in runs]))
         np.savez_compressed(
             base + ".npz", t_ps=t, drr=cols("drr"),
             thickness_nm=np.array([r["sweep_nm"] for r in runs]),
-            **{k: cols(k) for k, _, _ in COMPONENTS},
+            **{k: cols(k) for k, _, _ in COMPONENTS}, **extra,
             labels=np.array([r["label"] for r in runs]),
             meta=json.dumps(dict(swept=info, gui_inputs=runs[0]["inputs"],
-                                 runtime_s=[r.get("elapsed") for r in runs])))
+                                 runtime_s=[r.get("elapsed") for r in runs],
+                                 background=[bg_meta(r["res"]) for r in runs])))
         files.append(base + ".npz")
     return files
 
@@ -198,6 +240,8 @@ def estimate_run_bytes(opts, N, nt, strain=False):
     if opts["csv"]:
         width = len(opts["csv_format"] % -1.2345e-5) + 1
         ncol = 2 + sum(bool(opts[o]) for _, _, o in COMPONENTS)
+        if opts.get("bg_enabled"):
+            ncol += bool(opts.get("bg_col_sub")) + bool(opts.get("bg_col_fit"))
         b += nt * ncol * width + 200
     if opts["npz"]:
         # compressed float arrays rarely shrink much; count them in full
@@ -215,7 +259,8 @@ def estimate_run_bytes(opts, N, nt, strain=False):
 def estimate_combined_bytes(opts, nt, n_runs):
     b = 0
     if opts["csv"] or not opts["npz"]:
-        b += nt * (1 + n_runs) * (len(opts["csv_format"] % -1.2345e-5) + 1)
+        k = 2 if (opts.get("bg_enabled") and opts.get("bg_col_sub")) else 1
+        b += nt * (1 + k * n_runs) * (len(opts["csv_format"] % -1.2345e-5) + 1)
     if opts["npz"]:
         b += 8 * nt * (1 + 5 * n_runs) + 20_000
     return b
