@@ -2171,8 +2171,30 @@ class App(tk.Tk):
         else:
             lines.append("Files: none are saved automatically (switch saving "
                          "on in the Output tab, or use File → Export later).")
+        lines.append(self._bg_plan_text())
         lines.append("Estimated time: " + self._time_estimate(p["works"]))
         return "\n".join(lines)
+
+    def _bg_plan_text(self):
+        """One line on whether / how the background will be subtracted."""
+        if not self._bg_shown():
+            return ("Background subtraction: off (switch it on in the "
+                    "Background tab)")
+        try:
+            st = self._bg_settings()
+        except ValueError as e:
+            return f"Background subtraction: {e}"
+        rng = (f"fit on delays > {st['cut_ps']:g} ps" if st["use_cut"]
+               else "fit on the whole time axis")
+        o = self._opts()
+        cols = []
+        if o["bg_col_sub"]:
+            cols.append("dR_over_R_minus_bg")
+        if o["bg_col_fit"]:
+            cols.append("bg_fit")
+        where = (f"; {' and '.join(cols)} written right after each dR_over_R "
+                 f"column" if cols else "; no extra column selected")
+        return f"Background subtraction: on, for every thickness ({rng}){where}"
 
     def schedule_preview(self):
         if getattr(self, "_preview_job", None):

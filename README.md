@@ -99,11 +99,17 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   - Other settings: force decaying exponentials (b, d ≤ 0), and what the
     subtracted column holds before the cut-off (empty/NaN, the original
     ΔR/R, or the extrapolated fit subtracted).
-  - The result is written next to the original in the same ΔR/R file:
-    `dR_over_R_minus_bg` and optionally `bg_fit`. The NPZ holds
-    `drr_minus_bg`, `bg_fit` and `bg_params`, and the metadata JSON holds
-    a, b, c, d (b, d in 1/ps) and the settings. A combined sweep file gets
-    one `dR_over_R_minus_bg_d=…` column per thickness.
+  - The result is written next to the original in the same ΔR/R file, as
+    the third column: `t, dR_over_R, dR_over_R_minus_bg[, bg_fit], strain,
+    …`. This works the same for single runs and for every thickness of a
+    sweep. In a combined sweep file each thickness gets its pair of
+    columns: `t, dR_over_R_d=100nm, dR_over_R_minus_bg_d=100nm,
+    dR_over_R_d=200nm, …`. If a fit is not possible for one run (e.g. no
+    points after the cut-off), its column is written as NaN and the log
+    says why. The NPZ holds `drr_minus_bg`, `bg_fit` and `bg_params`, and
+    the metadata JSON holds a, b, c, d (b, d in 1/ps) and the settings. The
+    sweep summary and its confirmation say whether the background will be
+    subtracted.
   - The fit parameters are printed in the log and in the tab ("Exponential
     fit params: a=…, b=…, c=…, d=…", or "fit failed — mean subtracted
     instead"). A *Background* plot tab shows data, fit and subtracted trace.

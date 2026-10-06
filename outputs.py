@@ -130,17 +130,20 @@ def write_run(res, base, opts, meta):
     if opts["csv"]:
         cols = [res["t_ps"] * TIME_UNITS[tu], res["drr"]]
         names = [f"t_{tu}", "dR_over_R"]
+        # background columns come right after dR_over_R (column 3, 4)
+        if res.get("bg") or res.get("bg_error"):
+            nan = np.full_like(res["drr"], np.nan)    # fit was not possible
+            bg = res.get("bg") or dict(sub=nan, fit=nan)
+            if opts.get("bg_col_sub", True):
+                cols.append(bg["sub"])
+                names.append("dR_over_R_minus_bg")
+            if opts.get("bg_col_fit"):
+                cols.append(bg["fit"])
+                names.append("bg_fit")
         for key, name, opt in COMPONENTS:
             if opts[opt]:
                 cols.append(res[key])
                 names.append(name)
-        if res.get("bg"):
-            if opts.get("bg_col_sub", True):
-                cols.append(res["bg"]["sub"])
-                names.append("dR_over_R_minus_bg")
-            if opts.get("bg_col_fit"):
-                cols.append(res["bg"]["fit"])
-                names.append("bg_fit")
         _csv(base + ".csv", cols, names, opts)
         files.append(base + ".csv")
     if opts["npz"]:
@@ -173,24 +176,32 @@ def write_sweep(runs, base, opts, info):
     t = runs[0]["res"]["t_ps"]
     tu = opts["csv_time_unit"]
     cols = lambda k: np.column_stack([r["res"][k] for r in runs])
-    names = [f"t_{tu}"] + [f"dR_over_R_d={r['sweep_value']:g}"
-                           f"{S.FILE_UNIT_NAMES.get(r['sweep_unit'], r['sweep_unit'])}"
-                           for r in runs]
-    has_bg = all(r["res"].get("bg") for r in runs)
-    data = [t * TIME_UNITS[tu], cols("drr")]
-    if has_bg and opts.get("bg_col_sub", True):
-        data.append(np.column_stack([r["res"]["bg"]["sub"] for r in runs]))
-        names += [n.replace("dR_over_R_", "dR_over_R_minus_bg_")
-                  for n in names[1:len(runs) + 1]]
+    nan = np.full_like(t, np.nan)
+    bg_of = lambda r, k: (r["res"]["bg"][k] if r["res"].get("bg") else nan)
+    has_bg = any(r["res"].get("bg") or r["res"].get("bg_error") for r in runs)
+    # one column per thickness, each followed by its background-subtracted
+    # (and fitted-background) column when the subtraction was done
+    data, names = [t * TIME_UNITS[tu]], [f"t_{tu}"]
+    for r in runs:
+        d = (f"d={r['sweep_value']:g}"
+             f"{S.FILE_UNIT_NAMES.get(r['sweep_unit'], r['sweep_unit'])}")
+        data.append(r["res"]["drr"])
+        names.append(f"dR_over_R_{d}")
+        if has_bg and opts.get("bg_col_sub", True):
+            data.append(bg_of(r, "sub"))
+            names.append(f"dR_over_R_minus_bg_{d}")
+        if has_bg and opts.get("bg_col_fit"):
+            data.append(bg_of(r, "fit"))
+            names.append(f"bg_fit_{d}")
     if opts["csv"] or not opts["npz"]:
         _csv(base + ".csv", data, names, opts)
         files.append(base + ".csv")
     if opts["npz"]:
         extra = {}
         if has_bg:
-            extra = dict(drr_minus_bg=np.column_stack([r["res"]["bg"]["sub"]
+            extra = dict(drr_minus_bg=np.column_stack([bg_of(r, "sub")
                                                        for r in runs]),
-                         bg_fit=np.column_stack([r["res"]["bg"]["fit"]
+                         bg_fit=np.column_stack([bg_of(r, "fit")
                                                  for r in runs]))
         np.savez_compressed(
             base + ".npz", t_ps=t, drr=cols("drr"),
