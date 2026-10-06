@@ -860,6 +860,7 @@ class App(tk.Tk):
         self.layers, self.sel, self._loading = [], None, False
         self.batches, self.run_counter = [], 0
         self.work_rate = None            # seconds per grid-cell update, measured
+        self.bg_rate = None              # seconds per background fit, measured
         self.queue, self.worker = queue.Queue(), None
         self.cancel_ev = threading.Event()
         self._stack_job = None
@@ -1773,25 +1774,35 @@ class App(tk.Tk):
             return
         self.config(cursor="watch")
         self.update_idletasks()
+        t_all = time.perf_counter()
         try:
             for r in runs:
                 self._fit_background(r["res"], st)
-                self.log(f"{r['label']}: " + (B.describe(r["res"]["bg"])
-                         if r["res"].get("bg") else r["res"]["bg_error"]))
+                self.log(f"{r['label']}: background re-fitted in "
+                         f"{fmt_duration(r['res']['bg_time'])} — " +
+                         (B.describe(r["res"]["bg"]) if r["res"].get("bg")
+                          else r["res"]["bg_error"]))
         finally:
             self.config(cursor="")
+        t_all = time.perf_counter() - t_all
+        self.log(f"re-fit of {len(runs)} run(s) took {fmt_duration(t_all)}", "head")
+        self.status.config(text=f"background re-fit — {len(runs)} run(s) in "
+                                f"{fmt_duration(t_all)}")
         self.draw_drr()
         self.redraw_run_plots()
         self._update_bg_result()
 
     @staticmethod
     def _fit_background(res, st):
+        """Fit + subtract; the time it took is kept in res["bg_time"]."""
         res.pop("bg", None)
         res.pop("bg_error", None)
+        t0 = time.perf_counter()
         try:
             res["bg"] = B.apply(res["t_ps"], res["drr"], **st)
         except Exception as e:
             res["bg_error"] = str(e)
+        res["bg_time"] = time.perf_counter() - t0
 
     # ---------------------------------------------------------------- output
     def _build_output_tab(self):
@@ -2020,7 +2031,16 @@ class App(tk.Tk):
     def _time_estimate(self, works):
         if not self.work_rate or not works:
             return "unknown until the first run has been timed"
-        return f"≈ {fmt_duration(self.work_rate * sum(works))} (from the last run's speed)"
+        sim = self.work_rate * sum(works)
+        txt = f"≈ {fmt_duration(sim)} simulation"
+        if self._bg_shown():
+            if self.bg_rate:
+                bgt = self.bg_rate * len(works)
+                txt += (f" + ≈ {fmt_duration(bgt)} background fit = ≈ "
+                        f"{fmt_duration(sim + bgt)}")
+            else:
+                txt += " + background fit (not timed yet)"
+        return txt + " (from the last run's speed)"
 
     def _single_plan(self):
         """Names and estimates for the next single run."""
@@ -2747,17 +2767,22 @@ class App(tk.Tk):
         st = self._bg_settings(opts)            # validated by the callers
         for job in jobs:
             job["bg_settings"] = st
-        self._pending = dict(batch, runs=[], n_jobs=len(jobs),
-                             opts=opts, t0=time.perf_counter())
+        self._pending = dict(batch, runs=[], n_jobs=len(jobs), opts=opts,
+                             t0=time.perf_counter(), sim_time=0.0,
+                             bg_time=0.0, bg_done=0)
         self.worker = threading.Thread(target=self._work, args=(jobs,), daemon=True)
         self.worker.start()
 
     def _work(self, jobs):
-        """Worker thread: only numpy here, all Tk work goes through the queue."""
+        """Worker thread: only numpy here, all Tk work goes through the queue.
+
+        Phase 1 runs every simulation; phase 2 (if switched on) fits and
+        subtracts the background of every run. Each part is timed on its own.
+        """
         n = len(jobs)
         for j, job in enumerate(jobs):
             def prog(f, j=j, lab=job["label"]):
-                self.queue.put(("progress", (j + f) / n, lab))
+                self.queue.put(("progress", f, f"Simulation {j + 1}/{n} — {lab}"))
             t0 = time.perf_counter()
             try:
                 res = M.run_model(job["stack"], job["materials"], job["cfg"],
@@ -2770,9 +2795,18 @@ class App(tk.Tk):
                 self.queue.put(("error", traceback.format_exc(), job["label"]))
                 return
             job["elapsed"] = time.perf_counter() - t0
-            if job.get("bg_settings"):
-                self._fit_background(res, job["bg_settings"])
-            self.queue.put(("one", job, res))
+            job["res"] = res
+            self.queue.put(("sim", job, res))
+        st = jobs[0].get("bg_settings") if jobs else None
+        if st:
+            for j, job in enumerate(jobs):
+                if self.cancel_ev.is_set():
+                    self.queue.put(("cancelled", None, None))
+                    return
+                self.queue.put(("progress", j / n,
+                                f"Background fit {j + 1}/{n} — {job['label']}"))
+                self._fit_background(job["res"], st)
+                self.queue.put(("bg", job, job["res"]))
         self.queue.put(("done", None, None))
 
     def _poll(self):
@@ -2784,21 +2818,39 @@ class App(tk.Tk):
                     el = time.perf_counter() - self._pending["t0"]
                     self.status.config(text=f"{b}: {100 * a:.0f} %  "
                                             f"({fmt_duration(el)} elapsed)")
-                elif kind == "one":
+                elif kind == "sim":
+                    pend = self._pending
+                    if not pend["runs"]:
+                        self.log("Phase 1 — simulation", "head")
                     a["res"] = b
-                    self._pending["runs"].append(a)
+                    pend["runs"].append(a)
+                    pend["sim_time"] += a["elapsed"]
                     work = len(b["t_ps"]) * b["grid"]["N"] * b["n_sub"]
                     self.work_rate = a["elapsed"] / work
-                    self.log(f"{a['label']} finished in "
+                    self.log(f"{a['label']}: simulation finished in "
                              f"{fmt_duration(a['elapsed'])}")
                     self.log(M.run_summary(b))
+                    if not a.get("bg_settings") and a.get("save_base"):
+                        a["saved"] = self._save_run(a, a["save_base"], pend["opts"])
+                elif kind == "bg":
+                    pend = self._pending
+                    if pend["bg_done"] == 0:
+                        self.log(f"Phase 2 — background subtraction (simulation "
+                                 f"took {fmt_duration(pend['sim_time'])})", "head")
+                    pend["bg_done"] += 1
+                    dt = b.get("bg_time", 0.0)
+                    pend["bg_time"] += dt
+                    self.bg_rate = dt
                     if b.get("bg"):
-                        self.log("  background: " + B.describe(b["bg"]))
-                    elif b.get("bg_error"):
-                        self.log("  background fit not possible: "
-                                 + b["bg_error"], "warn")
+                        self.log(f"{a['label']}: background subtraction finished "
+                                 f"in {fmt_duration(dt)}")
+                        self.log("  " + B.describe(b["bg"]))
+                    else:
+                        self.log(f"{a['label']}: background fit not possible "
+                                 f"({b.get('bg_error')}) — {fmt_duration(dt)}",
+                                 "warn")
                     if a.get("save_base"):
-                        self._save_run(a, a["save_base"], self._pending["opts"])
+                        a["saved"] = self._save_run(a, a["save_base"], pend["opts"])
                 elif kind in ("done", "cancelled", "error"):
                     self._finish(kind, a, b)
         except queue.Empty:
@@ -2816,7 +2868,13 @@ class App(tk.Tk):
             messagebox.showerror("Model error", a.strip().splitlines()[-1])
         elif kind == "cancelled":
             self.log(f"cancelled after {len(batch['runs'])} of "
-                     f"{batch['n_jobs']} runs", "warn")
+                     f"{batch['n_jobs']} simulations and {batch['bg_done']} "
+                     f"background fits", "warn")
+            # simulations that were not fitted are still saved (without the
+            # background columns)
+            for r in batch["runs"]:
+                if r.get("save_base") and not r.get("saved"):
+                    r["saved"] = self._save_run(r, r["save_base"], batch["opts"])
         if batch["runs"] and batch.get("combined"):
             try:
                 files = O.write_sweep(batch["runs"], batch["combined"],
@@ -2833,14 +2891,20 @@ class App(tk.Tk):
             if batch.get("figbase"):
                 self._save_figures(batch["figbase"], batch["opts"],
                                    extra=batch["kind"] == "single")
-        n = len(batch["runs"])
-        if batch["kind"] == "sweep" and n:
-            msg = (f"{n} run{'s' if n > 1 else ''} in {fmt_duration(total)} "
-                   f"({fmt_duration(total / n)} per run)")
-        else:
-            msg = f"in {fmt_duration(total)}"
+        n, nb = len(batch["runs"]), batch["bg_done"]
+        per = lambda t, k: f" ({fmt_duration(t / k)} per run)" if k > 1 else ""
+        parts = []
+        if n:
+            parts.append(f"simulation {fmt_duration(batch['sim_time'])}"
+                         + per(batch["sim_time"], n))
+        if nb:
+            parts.append(f"background {fmt_duration(batch['bg_time'])}"
+                         + per(batch["bg_time"], nb))
+        runs = f"{n} run{'s' if n != 1 else ''}: " if batch["kind"] == "sweep" else ""
+        msg = (runs + ", ".join(parts) + f"; total {fmt_duration(total)}"
+               if parts else f"after {fmt_duration(total)}")
         word = {"done": "done", "cancelled": "cancelled", "error": "stopped"}[kind]
-        self.log(f"{word}: {msg}", "head")
+        self.log(f"{word} — {msg}", "head")
         self.pbar["value"] = 1.0 if kind == "done" else 0
         self.status.config(text=f"{word} — {msg}")
         self.schedule_preview()          # time estimates now use this speed

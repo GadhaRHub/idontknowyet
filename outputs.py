@@ -89,7 +89,7 @@ def run_meta(res, label, inputs, elapsed=None):
     cfg = {k: v for k, v in res["cfg"].items()}
     return dict(label=label, created=datetime.datetime.now().isoformat(
                     timespec="seconds"),
-                runtime_s=elapsed, cfg=cfg,
+                runtime_s=elapsed, simulation_runtime_s=elapsed, cfg=cfg,
                 stack=[[n, t] for n, t in res["stack"]],
                 transducer=res.get("transducer"),
                 R_probe=float(abs(res["sol_probe"]["r"]) ** 2),
@@ -111,7 +111,8 @@ def bg_meta(res):
                 params=None if p is None else dict(zip("abcd", p)),
                 fit_failed_mean_subtracted=p is None,
                 fit_only_after_ps=bg["cut_ps"], points_used=bg["n_points"],
-                force_decay=bg["force_decay"], before_cutoff=bg["before"])
+                force_decay=bg["force_decay"], before_cutoff=bg["before"],
+                runtime_s=res.get("bg_time"))
 
 
 def _csv(path, cols, names, opts):

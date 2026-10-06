@@ -137,9 +137,16 @@ To add a unit, add one entry to `UNITS` in `units.py`.
     counter is saved with the session.
   - A preview lists the next file names, how many files and roughly how much
     space. File → Export uses the same choices.
-- **Run time**: the status bar shows the time elapsed while running, and
-  afterwards how long the run took (for a sweep, the total and the time per
-  run). Each run's time is also logged and stored in its metadata.
+- **Run time**: a run happens in two timed phases, first the simulation of
+  every run, then (when switched on) the background subtraction of every
+  run. The log names each phase and gives each run's time, e.g.
+  "run 1: simulation finished in 2.4 min" and "run 1: background
+  subtraction finished in 0.4 s". The status bar ends with the split, e.g.
+  "done — 6 runs: simulation 14 min (2.3 min per run), background 2.1 s
+  (0.35 s per run); total 14 min". The sweep estimate is split the same
+  way, and both times are stored in each run's metadata. Cancelling during
+  the background phase keeps (and saves) the finished simulations; the
+  runs not yet fitted are saved without the background columns.
 - **Plots**: the stack diagram and the total ΔR/R are always shown. Click a
   layer in the diagram to edit it. *Colours…* above the diagram sets the
   colour of each material (layers of the same material share one); the
