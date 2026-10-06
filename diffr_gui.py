@@ -31,6 +31,7 @@ from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg,
 
 import diffr_model as M
 import outputs as O
+import param_import as PI
 import sample_input as S
 import units as U
 
@@ -661,6 +662,121 @@ class StackColorDialog(tk.Toplevel):
         self.build()
 
 
+class ImportReviewDialog(tk.Toplevel):
+    """Shows everything read from a parameter file, where each value came
+    from, and what is missing, before it replaces the current inputs."""
+
+    SOURCE_TAGS = {"file": "file", "from n,k file": "file",
+                   "literature (file)": "lit", "literature (built-in)": "lit",
+                   "MISSING": "missing", "not in file (kept)": "kept",
+                   "blank (default)": "kept"}
+
+    def __init__(self, app, path):
+        super().__init__(app)
+        self.app, self.path, self.mat_dir = app, path, None
+        self.title(f"Review import — {os.path.basename(path)}")
+        self.transient(app)
+        W = min(1100, app.winfo_screenwidth() - 80)
+        H = min(700, app.winfo_screenheight() - 120)
+        self.geometry(f"{W}x{H}")
+        top = ttk.Frame(self, padding=(10, 8, 10, 0))
+        top.pack(fill="x")
+        self.head = ttk.Label(top, justify="left", wraplength=W - 40)
+        self.head.pack(anchor="w")
+        leg = ttk.Frame(top)
+        leg.pack(anchor="w", pady=(4, 0))
+        for text, col in (("from the file", INK), ("literature placeholder",
+                          LIT_C), ("missing — fill in after import", "#c00000"),
+                          ("not in the file: current value kept / default",
+                           INK2)):
+            ttk.Label(leg, text="■ " + text, foreground=col).pack(side="left",
+                                                                 padx=(0, 14))
+        mid = ttk.Frame(self, padding=(10, 6))
+        mid.pack(fill="both", expand=True)
+        cols = ("item", "value", "unit", "source", "note")
+        self.tv = ttk.Treeview(mid, columns=cols, show="tree headings")
+        self.tv.heading("#0", text="Section")
+        self.tv.column("#0", width=170, stretch=False)
+        for c, h, w in zip(cols, ("Quantity", "Value", "Unit", "Source", "Note"),
+                           (230, 200, 110, 150, 300)):
+            self.tv.heading(c, text=h)
+            self.tv.column(c, width=w, minwidth=40, anchor="w")
+        for tag, col in (("lit", LIT_C), ("missing", "#c00000"), ("kept", INK2),
+                         ("file", INK)):
+            self.tv.tag_configure(tag, foreground=col)
+        ysb = ttk.Scrollbar(mid, orient="vertical", command=self.tv.yview)
+        xsb = ttk.Scrollbar(mid, orient="horizontal", command=self.tv.xview)
+        self.tv.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
+        self.tv.grid(row=0, column=0, sticky="nsew")
+        ysb.grid(row=0, column=1, sticky="ns")
+        xsb.grid(row=1, column=0, sticky="ew")
+        mid.rowconfigure(0, weight=1)
+        mid.columnconfigure(0, weight=1)
+        self.warn = ttk.Label(self, foreground=LIT_C, justify="left",
+                              wraplength=W - 40, padding=(10, 0))
+        self.warn.pack(anchor="w")
+        bb = ttk.Frame(self, padding=10)
+        bb.pack(fill="x")
+        b = ttk.Button(bb, text="Materials folder…", command=self.choose_folder)
+        b.pack(side="left")
+        Tooltip(b, "Folder that holds the n,k files named in the parameter "
+                   "file (nfile=…). They are looked up by name, with or "
+                   "without .txt.")
+        ttk.Button(bb, text="Cancel", command=self.destroy).pack(side="right")
+        ttk.Button(bb, text="Apply to the GUI", command=self.apply).pack(
+            side="right", padx=6)
+        self.load()
+
+    def load(self):
+        try:
+            cfg, _ = S.resolve_config(self.app._cfg_entries(), self.app._flags())
+        except S.InputError:
+            cfg = None
+        try:
+            self.result = PI.read_file(self.path, cfg, self.mat_dir, self.app.cache)
+        except Exception as e:
+            messagebox.showerror("Import parameter file", str(e), parent=self)
+            self.destroy()
+            return
+        r = self.result
+        self.tv.delete(*self.tv.get_children())
+        sections = {}
+        for sec, item, val, unit, src, note in r["rows"]:
+            if sec not in sections:
+                sections[sec] = self.tv.insert("", "end", text=sec, open=True)
+            self.tv.insert(sections[sec], "end", text="",
+                           values=(item, val, unit, src, note),
+                           tags=(self.SOURCE_TAGS.get(src, "file"),))
+        n_miss = sum(r_[4] == "MISSING" for r_ in r["rows"])
+        n_lit = sum(r_[4].startswith("literature") for r_ in r["rows"])
+        n_file = sum(r_[4] in ("file", "from n,k file") for r_ in r["rows"])
+        names = ", ".join(f"{v[0]} (line {v[1]})" for v in
+                          r["found"]["names"].values())
+        what = []
+        if r["config"] or r["flags"]:
+            what.append("the Experiment settings it contains")
+        if r["layers"] is not None:
+            what.append(f"all layers (the stack becomes {len(r['layers'])} "
+                        f"layers)")
+        self.head.config(text=(
+            f"Read {names}.  {n_file} values from the file, {n_lit} literature "
+            f"placeholders, {n_miss} missing.\nApplying replaces "
+            + (" and ".join(what) or "nothing") + ". Check the values below; "
+            "you can still change anything afterwards in the tabs."))
+        self.warn.config(text="\n".join("⚠ " + w for w in r["warnings"]))
+
+    def choose_folder(self):
+        d = filedialog.askdirectory(title="Materials folder with the n,k files",
+                                    parent=self)
+        if d:
+            self.mat_dir = d
+            self.load()
+
+    def apply(self):
+        self.app.apply_import(self.result, self.path)
+        self.destroy()
+
+
 # ---------------------------------------------------------------------------
 # The application
 # ---------------------------------------------------------------------------
@@ -765,6 +881,8 @@ class App(tk.Tk):
                        accelerator="Ctrl+S")
         fm.add_command(label="Save session as…", command=self.save_session_as)
         fm.add_separator()
+        fm.add_command(label="Import parameter file (CFG / SAMPLE)…",
+                       command=self.import_params)
         fm.add_command(label="Import conf_file…", command=self.import_conf)
         fm.add_separator()
         fm.add_command(label="Export selected run (.npz + .csv)…",
@@ -2634,6 +2752,46 @@ class App(tk.Tk):
         self.log("Example stack (notebook section 13) loaded with literature "
                  "values pre-filled (marked ● lit.). n is never pre-filled: "
                  "type n, k for each layer or choose a dispersion file.", "warn")
+
+    def import_params(self):
+        p = filedialog.askopenfilename(
+            title="Import parameter file (CFG = dict(...), SAMPLE = [...])",
+            filetypes=[("Text / Python", "*.txt *.py *.cfg *.dat"),
+                       ("All", "*.*")])
+        if p:
+            ImportReviewDialog(self, p)
+
+    def apply_import(self, r, path):
+        for key, e in r["config"].items():
+            v, u = self.cfg_vars[key]
+            u.set(e["unit"])
+            v.set(e["value"])
+        for key, val in r["flags"].items():
+            self.flag_vars[key].set(val)
+        if r["layers"] is not None:
+            self.layers = r["layers"]
+            self.sel = None
+            self.refresh_tree(0)
+        n_miss = sum(x[4] == "MISSING" for x in r["rows"])
+        self.log(f"imported {os.path.basename(path)}: "
+                 f"{len(r['config'])} settings, "
+                 f"{0 if r['layers'] is None else len(r['layers'])} layers", "head")
+        for sec, item, val, unit, src, note in r["rows"]:
+            if src == "MISSING":
+                self.log(f"  missing: {sec} — {item}" + (f" ({note})" if note
+                                                          else ""), "err")
+        for w in r["warnings"]:
+            self.log("  " + w, "warn")
+        lit = [x for x in r["rows"] if x[4].startswith("literature")]
+        if lit:
+            self.log(f"  {len(lit)} values are literature placeholders "
+                     f"(marked ● lit.; Layers → Literature values… lists them)",
+                     "warn")
+        if n_miss:
+            messagebox.showwarning(
+                "Imported — please complete",
+                f"{n_miss} value(s) were not in the file and are still missing "
+                f"(listed in red in the log). Fill them in before running.")
 
     def import_conf(self):
         p = filedialog.askopenfilename(title="Import fs-sonar conf file",

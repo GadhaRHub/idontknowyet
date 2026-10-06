@@ -155,15 +155,16 @@ def literature_names():
     return sorted(M.LITERATURE)
 
 
-def apply_literature(lay, only_empty=False):
-    """Pre-fill a layer from diffr_model.LITERATURE[material].
+def apply_literature(lay, only_empty=False, table=None):
+    """Pre-fill a layer from a literature table (default
+    diffr_model.LITERATURE), keyed by material name.
 
     Values go in each field's default display unit. The filled strings are
     remembered in lay["lit"], so a value still equal to them at run time is
     reported as a literature placeholder (as build_sample does). Returns the
     list of quantities filled.
     """
-    lit = M.LITERATURE.get(lay["material"].strip())
+    lit = (M.LITERATURE if table is None else table).get(lay["material"].strip())
     if not lit:
         return []
     filled = []

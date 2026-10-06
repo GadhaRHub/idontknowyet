@@ -131,6 +131,25 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   map (e.g. viridis for a sweep), or changes the colour map of the strain map.
   Label and colour edits are kept when the plot redraws and are saved with
   the session.
+- **Import parameter file** (File menu): reads a text file written the
+  notebook way (see `examples/Parameter_info_example.txt`):
+  `CFG = dict(...)` for the experiment settings,
+  `SAMPLE = [("Si3N4", 9.37, dict(nfile=..., pe=..., rho=..., ...)), ...,
+  ("Si", None, dict(...))]` for the stack, and optionally a
+  `LITERATURE = {...}` table. Values are in the model's units (nm, ps, SI).
+  Nothing in the file is executed. Blocks are recognised by their content,
+  and any other text is ignored.
+  - `nfile="path/name"` uses a variable defined in the file
+    (`path = C:\...\materials`, quotes optional). The file is found with or
+    without `.txt`. If it isn't found, *Materials folder…* in the review
+    window looks for it by name in another folder.
+  - Properties the stack doesn't give are taken from the file's
+    `LITERATURE` table, else from the built-in one, and are marked as
+    literature placeholders.
+  - Before anything changes, a review window lists every value with its unit
+    and source (file / literature / missing), plus notes such as the file's
+    `# comments` and any warnings. *Apply to the GUI* fills the fields; then
+    check them in the tabs.
 - **File menu**:
   - import an fs-sonar `conf_file_*.txt`. Thicknesses, n,k files and peCoef
     come from the conf; the other constants come from the folder's

@@ -1,0 +1,44 @@
+General parameters used for this run:
+
+# Experimental setup
+CFG = dict(
+    lambda_pump_nm      = 960.0, #1028 needed
+    lambda_probe_nm     = 514.0,
+    pump_fluence_J_m2   = 12.7,
+    pulse_fwhm_ps       = 0.225,
+    t_min_ps            = -1.0,
+    t_max_ps            = 600.0,
+    dt_out_ps           = 0.05,
+    dz_nm               = 1.0,
+    substrate_model_nm  = 4000.0,
+    sponge_nm           = 800.0,
+    cfl                 = 0.40,
+    tau_th_ps           = 500.0,
+    include_strain      = True,
+    include_lattice_T   = True,
+    include_electron_T  = True,
+    include_displacement= True,
+)
+
+
+# Actual sample used
+path= C:\Users\ramesh\Projects_TOPTEC\Python\materials_krystof
+SAMPLE = [
+    ("Si3N4",    9.37, dict(nfile="path/krystof_Si3N4", pe=0.047, rho=2850., v=9679., alpha_lin=2.4e-6, B_bulk=142.2e9)),
+    ("Ti",      12.22, dict(nfile="path/krystof_Ti",    pe=0.0,   rho=4506., v=6160., alpha_lin=8.6e-6, B_bulk=105.8e9)),
+    ("Si3N4",  533.8,  dict(nfile="path/krystof_Si3N4", pe=0.047, rho=2850., v=9679., alpha_lin=2.4e-6, B_bulk=142.2e9)),
+    ("SiO2",  1312.8,  dict(nfile="path/krystof_SiO2",  pe=0.243, rho=2210., v=6156., alpha_lin=0.4e-6, B_bulk=39.2e9)),
+    ("Si",     None,   dict(nfile="path/krystof_Si",    pe=0.017, rho=2329., v=8437., alpha_lin=2.6e-6, B_bulk=98.0e9)),
+]
+
+
+
+# Literature values needed if any
+LITERATURE = {
+    "Si3N4": dict(rho=3200.,  v=10300., Cp=700., alpha_lin=3.3e-6,  B_bulk=250e9, k=0.0, dn_deta=-1.0 + 0j,    dn_dT=2.5e-5 + 0j),
+    "SiO2":  dict(rho=2200.,  v=5970.,  Cp=740., alpha_lin=0.5e-6,  B_bulk=37e9,  k=0.0, dn_deta=-0.4 + 0j,    dn_dT=1.0e-5 + 0j),
+    "Ti":    dict(rho=4506.,  v=6070.,  Cp=523., alpha_lin=8.6e-6,  B_bulk=110e9,        dn_deta=3.0 + 1.0j,   dn_dT=1.0e-4 + 5e-5j, dn_dTe=6.0e-6 + 6.0e-6j, Ce=9.6e4, tau_ep_ps=0.6),
+    "Si":    dict(rho=2329.,  v=8433.,  Cp=700., alpha_lin=2.6e-6,  B_bulk=98e9,         dn_deta=-12.0 + 0.5j, dn_dT=2.0e-4 + 1e-5j),
+    "Al":    dict(rho=2700.,  v=6420.,  Cp=897., alpha_lin=23.1e-6, B_bulk=76e9,                                                     dn_dTe=1e-5 + 1e-5j,     Ce=2.1e4, tau_ep_ps=0.5),
+    "Au":    dict(rho=19300., v=3240.,  Cp=129., alpha_lin=14.2e-6, B_bulk=180e9,                                                    dn_dTe=1e-5 + 1e-5j,     Ce=2.1e4, tau_ep_ps=1.0),
+}
