@@ -5,7 +5,7 @@ differential-reflectivity forward model in
 `diffR_thinfilm_model_custom.ipynb`.
 
 ```
-pip install -r requirements.txt     # numpy, matplotlib, scipy (tkinter ships with Python)
+pip install -r requirements.txt     # numpy, matplotlib (+ scipy, optional); tkinter ships with Python
 python diffr_gui.py
 ```
 
@@ -15,7 +15,7 @@ python diffr_gui.py
 |---|---|
 | `diffr_gui.py` | The GUI. Run this. |
 | `sample_input.py` | Turns what the user typed (numbers + units) into model units, builds the sample, imports conf files, saves/loads sessions. No GUI code. |
-| `background.py` | Double-exponential background subtraction: `minus_exp_fun_single3` (unchanged) plus the wrapper the GUI uses. Needs scipy. |
+| `background.py` | Double-exponential background subtraction: `minus_exp_fun_single3` (unchanged) plus the wrapper the GUI uses. Uses scipy's `curve_fit` when installed, otherwise a built-in numpy fitter, so nothing extra is needed. |
 | `param_import.py` | Reads parameter files (`CFG = dict(...)`, `SAMPLE = [...]`, `LITERATURE = {...}`) without executing them. |
 | `outputs.py` | Writes results the way the Output tab says (CSV, NPZ, metadata JSON) and estimates file counts, sizes and run times. No GUI code. |
 | `units.py` | The unit menus and conversion factors. |

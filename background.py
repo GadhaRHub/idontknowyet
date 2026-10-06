@@ -4,10 +4,91 @@ minus_exp_fun_single3 is the user's function, unchanged. apply() wraps it for
 the GUI: it applies the delay cut-off, and builds full-length columns for the
 output file (the original trace keeps its full time axis; points before the
 cut-off are filled as the user chooses).
+
+The fit uses scipy.optimize.curve_fit when scipy is installed. Without scipy
+a small numpy-only replacement (_curve_fit_numpy, a bounded
+Levenberg-Marquardt least-squares fit with the same call signature) is used,
+so the subtraction works with numpy alone. FIT_ENGINE says which one is in use.
 """
 
 import numpy as np
-from scipy.optimize import curve_fit
+
+
+def _curve_fit_numpy(f, xdata, ydata, p0, bounds=(-np.inf, np.inf),
+                     maxfev=20000, **_):
+    """Minimal stand-in for scipy.optimize.curve_fit (least squares,
+    optional box bounds). Returns (popt, None); raises RuntimeError when it
+    does not converge to a finite result, like curve_fit does."""
+    x = np.asarray(xdata, float)
+    y = np.asarray(ydata, float)
+    p = np.asarray(p0, float).copy()
+    n = p.size
+    lo = np.broadcast_to(np.asarray(bounds[0], float), (n,)).copy()
+    hi = np.broadcast_to(np.asarray(bounds[1], float), (n,)).copy()
+    p = np.clip(p, lo, hi)
+
+    def resid(q):
+        with np.errstate(all="ignore"):
+            return y - np.asarray(f(x, *q), float)
+
+    r = resid(p)
+    cost = float(r @ r)
+    if not np.isfinite(cost):
+        raise RuntimeError("non-finite residual at the starting point")
+    nfev, lam = 1, 1e-3
+    for _ in range(2000):
+        # forward-difference Jacobian of the model (= -d resid / dp)
+        J = np.empty((y.size, n))
+        f0 = y - r
+        for k in range(n):
+            h = 1e-7 * max(1.0, abs(p[k]))
+            if p[k] + h > hi[k]:
+                h = -h
+            q = p.copy()
+            q[k] += h
+            with np.errstate(all="ignore"):
+                J[:, k] = (np.asarray(f(x, *q), float) - f0) / h
+        nfev += n
+        if not np.all(np.isfinite(J)):
+            raise RuntimeError("non-finite Jacobian")
+        A = J.T @ J
+        g = J.T @ r
+        dA = np.diag(A).copy()
+        dA[dA <= 0] = 1e-30
+        improved = False
+        while lam < 1e16:
+            try:
+                step = np.linalg.solve(A + lam * np.diag(dA), g)
+            except np.linalg.LinAlgError:
+                lam *= 10.0
+                continue
+            p_new = np.clip(p + step, lo, hi)
+            r_new = resid(p_new)
+            nfev += 1
+            c_new = float(r_new @ r_new)
+            if np.isfinite(c_new) and c_new < cost:
+                rel = (cost - c_new) / max(cost, 1e-300)
+                small = np.all(np.abs(p_new - p) <= 1e-10 * (np.abs(p) + 1e-12))
+                p, r, cost = p_new, r_new, c_new
+                lam = max(lam / 3.0, 1e-12)
+                improved = True
+                if rel < 1e-12 or small:
+                    return p, None
+                break
+            lam *= 4.0
+        if not improved:            # no step lowers the cost: a minimum
+            return p, None
+        if nfev > maxfev:
+            raise RuntimeError("maximum number of function evaluations reached")
+    return p, None
+
+
+try:
+    from scipy.optimize import curve_fit
+    FIT_ENGINE = "scipy.optimize.curve_fit"
+except ImportError:                       # numpy-only fallback
+    curve_fit = _curve_fit_numpy
+    FIT_ENGINE = "built-in numpy fitter (scipy not installed)"
 
 
 def minus_exp_fun_single3(time, signal, showfig=False, force_decay=True):

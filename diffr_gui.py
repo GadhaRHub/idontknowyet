@@ -1629,6 +1629,10 @@ class App(tk.Tk):
             "in the same file, so both can be used. t is in ps, so b and d "
             "are in 1/ps.")).grid(row=0, column=0, sticky="w", padx=8,
                                   pady=(6, 2))
+        if B is not None:
+            ttk.Label(tab, foreground=INK2, text="Fitting engine: " +
+                      B.FIT_ENGINE).grid(row=4, column=0, sticky="w", padx=8,
+                                         pady=(2, 8))
         if B is None:
             ttk.Label(tab, foreground="#c00000", wraplength=560, text=(
                 f"Background subtraction needs scipy ({BG_IMPORT_ERROR}). "
