@@ -85,7 +85,14 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   every value that is still a placeholder, with its unit, and can copy the
   list to the clipboard. The list also opens after *Fill from literature*.
 - **Thickness sweep tab**: pick a layer and give a start, an end and an
-  increment in any thickness unit. The end is included when it falls on the
+  increment in any thickness unit. Layers are listed with name, number and
+  thickness ("Layer 4: Si3N4 (533.8 nm)"). The sweep follows that layer
+  when it is renamed or moved, and runs are labelled "Si3N4 (layer 4) =
+  100 nm". The swept layer is marked on the stack diagram ("◀ thickness
+  swept ▶", dashed frame, range and number of runs, and the same in the
+  diagram's title): as planned while the tab is open, and as run while the
+  plots show a sweep. A saved stack figure therefore records it too.
+  *▶ Run sweep (F6)* sits next to *▶ Run model (F5)* under every tab. The end is included when it falls on the
   step grid. The tab shows what the sweep will produce: the number of
   simulations, the number of files and their names, the estimated disk space
   and the estimated time. Before the sweep starts, the same summary is shown
@@ -154,9 +161,13 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   the background phase keeps (and saves) the finished simulations; the
   runs not yet fitted are saved without the background columns.
 - **Plots**: the stack diagram and the total ΔR/R are always shown. Click a
-  layer in the diagram to edit it. *Colours…* above the diagram sets the
-  colour of each material (layers of the same material share one); the
-  colours are saved with the session. Tick *Components*, *Kernels & absorption*
+  layer in the diagram to edit it. Default colours: Ti thistle, Si3N4
+  paleturquoise, SiO2 darkkhaki, the substrate (last layer) saddlebrown;
+  other materials get palette colours. *Colours…* above the diagram changes
+  any of them, the substrate included; the colours are saved with the
+  session. *Sweep colours* on the ΔR/R plot picks the colour map for a
+  sweep's curves from all matplotlib colour maps (Blues, ocean, bwr,
+  viridis, coolwarm, …; add `_r` to reverse one). Tick *Components*, *Kernels & absorption*
   or *Strain map η(z,t)* for more tabs (the strain map must be ticked before
   the run). Every plot has the matplotlib toolbar (zoom, pan, home, back,
   save image), mouse-wheel zoom, and *Axes & labels…* for the title, axis
@@ -172,7 +183,9 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   ("Si", None, dict(...))]` for the stack, and optionally a
   `LITERATURE = {...}` table. Values are in the model's units (nm, ps, SI).
   Nothing in the file is executed. Blocks are recognised by their content,
-  and any other text is ignored.
+  and any other text is ignored. A comma missing at the end of an entry
+  (a common slip when a layer is added) is repaired, and the review window
+  names the line so it can be fixed in the file.
   - `nfile="path/name"` uses a variable defined in the file
     (`path = C:\...\materials`, quotes optional). The file is found with or
     without `.txt`. If it isn't found, *Materials folder…* in the review
@@ -192,3 +205,7 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   - export the selected run or a sweep, with the Output tab's choices.
 
 Runs execute in the background with a progress bar and a Cancel button.
+
+The window uses the "Lavender fields" palette: cream #FDFBD4 panels,
+lavender #C1BFFF buttons and tabs, violet #CF6DFC for the Run buttons and the
+selected tab, olive #BDB96A frames and dividers. Plot areas stay white.

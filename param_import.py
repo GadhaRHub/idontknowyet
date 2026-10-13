@@ -161,6 +161,44 @@ def expand_path(nfile, variables):
     return nfile, None
 
 
+def _code_part(line):
+    """The line without a trailing # comment (quotes respected)."""
+    q = None
+    for i, c in enumerate(line):
+        if q:
+            if c == q:
+                q = None
+        elif c in "'\"":
+            q = c
+        elif c == "#":
+            return line[:i]
+    return line
+
+
+def _repair_commas(expr):
+    """Add the comma that is missing between two entries written on
+    consecutive lines, e.g.
+        ("HfO2", 100.0, dict(...))      <- no comma
+        ("Si3N4", 533.8, dict(...)),
+    Returns (repaired text, [line offsets that got a comma])."""
+    lines = expr.split("\n")
+    fixed = []
+    for i, line in enumerate(lines):
+        code = _code_part(line).rstrip()
+        if not code or code[-1] not in ")]}\"'0123456789.":
+            continue
+        nxt = next((j for j in range(i + 1, len(lines))
+                    if _code_part(lines[j]).strip()), None)
+        if nxt is None:
+            continue
+        start = _code_part(lines[nxt]).lstrip()
+        if start[:1] in ("(", "[", "{", "'", '"'):
+            k = len(code)
+            lines[i] = line[:k] + "," + line[k:]
+            fixed.append(i)
+    return "\n".join(lines), fixed
+
+
 def parse_text(text):
     """Find the config, stack and literature blocks. Returns a dict with
     cfg, cfg_notes, sample, sample_notes, literature, variables, names,
@@ -169,12 +207,24 @@ def parse_text(text):
                  literature=None, names={}, warnings=[],
                  variables=_variables(text))
     for name, expr, line in _blocks(text):
+        errs = (SyntaxError, ValueError, TypeError, ZeroDivisionError)
         try:
             val = _value(ast.parse(expr.strip(), mode="eval").body)
-        except (SyntaxError, ValueError, TypeError, ZeroDivisionError) as e:
-            found["warnings"].append(f"line {line}: {name} could not be read "
-                                     f"({e}); skipped")
-            continue
+        except errs as e:
+            # most often a comma missing at the end of an entry
+            repaired, fixed = _repair_commas(expr)
+            try:
+                if not fixed:
+                    raise e
+                val = _value(ast.parse(repaired.strip(), mode="eval").body)
+            except errs as e2:
+                found["warnings"].append(f"line {line}: {name} could not be "
+                                         f"read ({e2}); skipped")
+                continue
+            lines_ = ", ".join(str(line + k) for k in fixed)
+            found["warnings"].append(
+                f"{name}: a comma was missing at the end of line {lines_}; "
+                f"read as separate entries. Please add it to the file.")
         if isinstance(val, dict) and len(CFG_KEYS & set(val)) >= 2:
             kind = "cfg"
         elif (isinstance(val, list) and val and

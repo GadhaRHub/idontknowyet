@@ -45,6 +45,79 @@ SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
           "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 INK, INK2, GRID_C, LIT_C = "#0b0b0b", "#52514e", "#d9d8d4", "#b35900"
 
+# "Lavender fields" palette for the window theme
+CREAM, OLIVE, LAVENDER, VIOLET = "#FDFBD4", "#BDB96A", "#C1BFFF", "#CF6DFC"
+OLIVE_DARK = "#8a8640"          # olive, darkened for frame lines / hover
+
+
+def apply_theme(root):
+    """Window theme from the palette: cream panels, lavender buttons and
+    tabs, violet for the Run buttons and the selected tab, olive frames.
+    Plot drawing areas stay white."""
+    st = ttk.Style(root)
+    try:
+        st.theme_use("clam")       # the native themes ignore most colours
+    except tk.TclError:
+        return
+    st.configure(".", background=CREAM, foreground=INK, bordercolor=OLIVE,
+                 lightcolor=CREAM, darkcolor=OLIVE, troughcolor=CREAM,
+                 focuscolor=VIOLET, selectbackground=VIOLET,
+                 selectforeground=INK)
+    for w in ("TFrame", "TLabel", "TCheckbutton", "TRadiobutton", "TNotebook",
+              "TPanedwindow"):
+        st.configure(w, background=CREAM)
+    st.map("TCheckbutton", background=[("active", CREAM)],
+           indicatorbackground=[("selected", VIOLET), ("!selected", "white")])
+    st.map("TRadiobutton", background=[("active", CREAM)],
+           indicatorbackground=[("selected", VIOLET), ("!selected", "white")])
+    st.configure("TLabelframe", background=CREAM, bordercolor=OLIVE,
+                 lightcolor=OLIVE, darkcolor=OLIVE)
+    st.configure("TLabelframe.Label", background=CREAM, foreground=INK)
+    st.configure("TButton", background=LAVENDER, bordercolor=OLIVE_DARK,
+                 lightcolor=LAVENDER, darkcolor=LAVENDER, padding=(8, 3))
+    st.map("TButton", background=[("disabled", "#e6e5d8"), ("pressed", VIOLET),
+                                  ("active", "#d3d1ff")],
+           foreground=[("disabled", "#9a998f")])
+    st.configure("Accent.TButton", background=VIOLET, lightcolor=VIOLET,
+                 darkcolor=VIOLET, font=("TkDefaultFont", 9, "bold"))
+    st.map("Accent.TButton", background=[("disabled", "#e6e5d8"),
+                                         ("pressed", "#b84fe8"),
+                                         ("active", "#dc8ffd")],
+           foreground=[("disabled", "#9a998f")])
+    st.configure("TNotebook", bordercolor=OLIVE, tabmargins=(2, 4, 2, 0))
+    st.configure("TNotebook.Tab", background=LAVENDER, bordercolor=OLIVE,
+                 lightcolor=LAVENDER, padding=(8, 3))
+    st.map("TNotebook.Tab", background=[("selected", VIOLET), ("active", "#d3d1ff")],
+           lightcolor=[("selected", VIOLET)])
+    for w in ("TEntry", "TCombobox", "TSpinbox"):
+        st.configure(w, fieldbackground="white", background=LAVENDER,
+                     bordercolor=OLIVE_DARK, arrowcolor=INK)
+    st.map("TCombobox", fieldbackground=[("readonly", "white")],
+           background=[("active", "#d3d1ff")])
+    st.configure("Treeview", background="white", fieldbackground="white",
+                 bordercolor=OLIVE)
+    st.map("Treeview", background=[("selected", VIOLET)],
+           foreground=[("selected", INK)])
+    st.configure("Treeview.Heading", background=LAVENDER, bordercolor=OLIVE_DARK)
+    st.map("Treeview.Heading", background=[("active", "#d3d1ff")])
+    st.configure("TProgressbar", background=VIOLET, troughcolor="white",
+                 bordercolor=OLIVE, lightcolor=VIOLET, darkcolor=VIOLET)
+    st.configure("TScrollbar", background=LAVENDER, troughcolor=CREAM,
+                 bordercolor=OLIVE, arrowcolor=INK)
+    st.configure("Sash", sashthickness=7, background=OLIVE)
+    st.configure("TSeparator", background=OLIVE)
+    root.configure(background=CREAM)
+    root.option_add("*Toplevel.background", CREAM)
+    root.option_add("*TCombobox*Listbox.background", "white")
+    root.option_add("*TCombobox*Listbox.selectBackground", VIOLET)
+    root.option_add("*TCombobox*Listbox.selectForeground", INK)
+
+
+# default stack colours (can be changed in Colours… above the stack diagram)
+DEFAULT_MATERIAL_COLORS = {"Ti": "thistle", "Si3N4": "paleturquoise",
+                           "SiO2": "darkkhaki"}
+SUBSTRATE_KEY, SUBSTRATE_DEFAULT = "__substrate__", "saddlebrown"
+
 matplotlib.rcParams.update({
     "font.size": 9, "axes.edgecolor": INK2, "axes.labelcolor": INK,
     "xtick.color": INK2, "ytick.color": INK2, "grid.color": GRID_C,
@@ -93,7 +166,8 @@ class ScrollableFrame(ttk.Frame):
 
     def __init__(self, master, **kw):
         super().__init__(master, **kw)
-        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0)
+        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0,
+                                background=CREAM)
         sb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.inner = ttk.Frame(self.canvas)
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(
@@ -169,6 +243,11 @@ class PlotPanel(ttk.Frame):
                    "legend and font size")
         self.toolbar = NavigationToolbar2Tk(self.canvas, bar, pack_toolbar=False)
         self.toolbar.update()
+        for w in [self.toolbar] + self.toolbar.winfo_children():   # tk widgets
+            try:
+                w.configure(background=CREAM)
+            except tk.TclError:
+                pass
         self.toolbar.pack(side="left", fill="x", expand=True)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self.overrides = {}
@@ -307,10 +386,23 @@ class PlotPanel(ttk.Frame):
         self.canvas.draw_idle()
 
 
-LINE_CMAPS = ["tab10", "Blues", "viridis", "plasma", "cividis", "magma",
-              "coolwarm", "Greys", "Dark2", "Set1"]
-IMAGE_CMAPS = ["RdBu_r", "coolwarm", "seismic", "PuOr_r", "bwr", "viridis",
-               "inferno", "gray"]
+def _all_cmaps(first):
+    """The given colour maps first, then every other matplotlib colour map
+    (reversed '_r' versions can still be typed)."""
+    rest = sorted((n for n in colormaps if not n.endswith("_r") and n not in first),
+                  key=str.lower)
+    return [n for n in first if n in colormaps] + rest
+
+
+LINE_CMAPS = _all_cmaps(
+    ["Blues", "viridis", "plasma", "ocean", "bwr", "coolwarm", "seismic",
+     "RdBu", "Spectral", "jet", "rainbow", "turbo", "cool", "hot", "copper",
+     "winter", "summer", "autumn", "spring", "terrain", "cubehelix", "magma",
+     "inferno", "cividis", "Greens", "Reds", "Purples", "Oranges", "Greys",
+     "tab10", "tab20", "Dark2", "Set1", "Set2", "Paired"])
+IMAGE_CMAPS = _all_cmaps(
+    ["RdBu_r", "bwr", "coolwarm", "seismic", "PuOr_r", "ocean", "viridis",
+     "inferno", "jet", "gray"])
 
 
 def cmap_colors(name, n):
@@ -389,6 +481,7 @@ class PlotColorDialog(tk.Toplevel):
             self.line_cmap = tk.StringVar(value=self.style().get("line_cmap") or
                                           LINE_CMAPS[0])
             ttk.Combobox(f, textvariable=self.line_cmap, values=LINE_CMAPS,
+                         height=20,
                          width=10).pack(side="left", padx=4)
             ttk.Button(f, text="Apply", command=self.apply_line_cmap).pack(side="left")
             r += 1
@@ -399,6 +492,7 @@ class PlotColorDialog(tk.Toplevel):
             self.img_cmap = tk.StringVar(value=self.style().get("image_cmap") or
                                          ax.images[0].get_cmap().name)
             cb = ttk.Combobox(f, textvariable=self.img_cmap, values=IMAGE_CMAPS,
+                              height=20,
                               width=10)
             cb.pack(side="left", padx=4)
             ttk.Button(f, text="Apply", command=self.apply_img_cmap).pack(side="left")
@@ -626,13 +720,19 @@ class StackColorDialog(tk.Toplevel):
     def build(self):
         for w in self.body.winfo_children():
             w.destroy()
-        names = list(dict.fromkeys(l["material"].strip() for l in self.app.layers))
+        names = list(dict.fromkeys(l["material"].strip()
+                                   for l in self.app.layers[:-1]))
+        sub = self.app.layers[-1]["material"].strip() if self.app.layers else ""
         ttk.Label(self.body, text="Colours are per material: layers of the "
-                  "same material share one.", foreground=INK2).grid(
-            row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
-        for r, name in enumerate(names, 1):
-            col = self.app.material_color(name, names)
-            ttk.Label(self.body, text=name or "(unnamed)").grid(
+                  "same material share one. The substrate has its own.",
+                  foreground=INK2).grid(row=0, column=0, columnspan=4,
+                                        sticky="w", pady=(0, 6))
+        for r, name in enumerate(names + [SUBSTRATE_KEY], 1):
+            is_sub = name == SUBSTRATE_KEY
+            col = matplotlib.colors.to_hex(
+                self.app.material_color(name, names, substrate=is_sub))
+            ttk.Label(self.body, text=f"Substrate ({sub or 'last layer'})"
+                      if is_sub else (name or "(unnamed)")).grid(
                 row=r, column=0, sticky="w", padx=(0, 8))
             sw = tk.Label(self.body, width=6, background=col, relief="solid",
                           borderwidth=1, cursor="hand2")
@@ -647,8 +747,10 @@ class StackColorDialog(tk.Toplevel):
 
     def pick(self, name):
         _, hexcol = colorchooser.askcolor(
-            color=self.app.material_color(name), parent=self,
-            title=f"Colour for {name}")
+            color=matplotlib.colors.to_hex(self.app.material_color(
+                name, substrate=name == SUBSTRATE_KEY)), parent=self,
+            title="Colour for the substrate" if name == SUBSTRATE_KEY
+            else f"Colour for {name}")
         if hexcol:
             self.app.stack_colors[name] = hexcol
             self.changed()
@@ -850,6 +952,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("diffR thin-film model")
+        apply_theme(self)
         # fit the window to the screen (laptops, display scaling)
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         W, H = min(1560, sw - 40), min(940, sh - 90)
@@ -875,19 +978,17 @@ class App(tk.Tk):
         self.overlay = tk.BooleanVar(value=False)
         self.scale_exp = tk.StringVar(value="3")
         self.stack_mode = tk.StringVar(value="Equal widths")
+        self.sweep_cmap = tk.StringVar(value="Blues")
         self.stack_colors = {}          # material name -> "#rrggbb" chosen by the user
         self.view_run = tk.StringVar()
 
         self._build_menu()
-        try:                         # thicker, easier-to-grab dividers
-            ttk.Style(self).configure("Sash", sashthickness=7)
-        except tk.TclError:
-            pass
         # A tk (not ttk) PanedWindow: each side has a minimum width, so the
         # controls can never be squeezed to nothing; drag the divider to resize.
         outer = tk.PanedWindow(self, orient="horizontal", sashwidth=8,
                                sashrelief="raised", showhandle=False,
-                               borderwidth=0, opaqueresize=True)
+                               borderwidth=0, opaqueresize=True,
+                               background=OLIVE)
         outer.pack(fill="both", expand=True)
         leftc = ttk.Frame(outer)
         right = ttk.Frame(outer)
@@ -961,7 +1062,8 @@ class App(tk.Tk):
         rm = tk.Menu(mb, tearoff=0)
         rm.add_command(label="Run model", command=self.run_single,
                        accelerator="F5")
-        rm.add_command(label="Run thickness sweep", command=self.run_sweep)
+        rm.add_command(label="Run thickness sweep", command=self.run_sweep,
+                       accelerator="F6")
         rm.add_command(label="Cancel", command=self.cancel)
         rm.add_separator()
         rm.add_command(label="List literature placeholders…",
@@ -973,6 +1075,7 @@ class App(tk.Tk):
         mb.add_cascade(label="Help", menu=hm)
         self.config(menu=mb)
         self.bind_all("<F5>", lambda e: self.run_single())
+        self.bind_all("<F6>", lambda e: self.run_sweep())
         self.bind_all("<Control-s>", lambda e: self.save_session())
         self.bind_all("<Control-o>", lambda e: self.open_session())
 
@@ -1294,6 +1397,7 @@ class App(tk.Tk):
         self._refresh_tree_row(self.sel)
         if key in ("material", "d", "d_unit"):
             self.schedule_stack()
+            self._refresh_sweep_layers()      # names/thickness in the sweep list
         if key in ("nk_mode", "nk_file", "nk_file_unit", "kfill_pump",
                    "kfill_probe"):
             self.schedule_file_nk()
@@ -1510,8 +1614,12 @@ class App(tk.Tk):
                                    f"Delete layer {self.sel + 1} "
                                    f"({self.layers[self.sel]['material']})?"):
             return
+        was_swept = self.layers[self.sel] is getattr(self, "_sweep_obj", None)
         del self.layers[self.sel]
         self.refresh_tree(max(0, self.sel - 1))
+        if was_swept and len(self.layers) > 1:
+            self.log(f"The deleted layer was the swept layer; the sweep now "
+                     f"uses {self.layer_title(self.sweep_index() or 0)}.", "warn")
 
     def move_layer(self, step):
         i = self.sel
@@ -1569,6 +1677,8 @@ class App(tk.Tk):
     def _build_sweep_tab(self):
         sf = ScrollableFrame(self.tabs)
         self.tabs.add(sf, text="Thickness sweep")
+        self.sweep_tab = sf
+        self.tabs.bind("<<NotebookTabChanged>>", lambda e: self.schedule_stack())
         tab = sf.inner
         ttk.Label(tab, wraplength=560, justify="left", foreground=INK2,
                   text="Vary the thickness of one layer, run the model for each "
@@ -1580,7 +1690,8 @@ class App(tk.Tk):
         ttk.Label(g, text="Layer").grid(row=0, column=0, sticky="w")
         self.sweep_layer = tk.StringVar()
         self.sweep_cb = ttk.Combobox(g, textvariable=self.sweep_layer,
-                                     state="readonly", width=30)
+                                     state="readonly", width=38)
+        self.sweep_cb.bind("<<ComboboxSelected>>", self._on_sweep_choice)
         self.sweep_cb.grid(row=0, column=1, columnspan=4, sticky="w", pady=2)
         self.sweep_start = tk.StringVar(value="100")
         self.sweep_end = tk.StringVar(value="600")
@@ -1613,7 +1724,8 @@ class App(tk.Tk):
             row=3, column=0, sticky="w", padx=8, pady=10)
         for v in (self.sweep_layer, self.sweep_start, self.sweep_end,
                   self.sweep_step, self.sweep_unit):
-            v.trace_add("write", lambda *_: self.schedule_preview())
+            v.trace_add("write", lambda *_: (self.schedule_preview(),
+                                             self.schedule_stack()))
 
     # ------------------------------------------------------------ background
     def _build_background_tab(self):
@@ -2077,11 +2189,10 @@ class App(tk.Tk):
 
     def _sweep_plan(self):
         """Everything about the next sweep; raises ValueError with a message."""
-        sl = self.sweep_layer.get()
-        if not sl:
+        idx = self.sweep_index()
+        if idx is None:
             raise ValueError("Add at least one layer above the substrate to "
                              "sweep.")
-        idx = int(sl.split(":")[0]) - 1
         try:
             a, b, st = (float(v.get()) for v in
                         (self.sweep_start, self.sweep_end, self.sweep_step))
@@ -2143,8 +2254,8 @@ class App(tk.Tk):
                     nbytes=nbytes, works=works)
 
     def _describe_sweep(self, p):
-        lines = [f"{len(p['vals'])} simulations of layer {p['idx'] + 1} "
-                 f"({self.layers[p['idx']]['material']}): "
+        lines = [f"{len(p['vals'])} simulations, varying the thickness of "
+                 f"{self.layer_title(p['idx'])}: "
                  f"{p['vals'][0]:g} … {p['vals'][-1]:g} {p['unit']}"]
         if p["nfiles"]:
             parts = []
@@ -2237,27 +2348,72 @@ class App(tk.Tk):
         self.out_preview.config(text=single + "\n\nThickness sweep:\n" + sweep_txt,
                                 foreground=col)
 
+    def layer_title(self, i, layers=None):
+        """'Si3N4 (layer 4)' — never just a number."""
+        layers = layers or self.layers
+        name = layers[i]["material"].strip() or "unnamed layer"
+        return f"{name} (layer {i + 1})"
+
+    def _sweep_choice_text(self, i):
+        lay = self.layers[i]
+        name = lay["material"].strip() or "(no material name yet)"
+        d = f"{lay['d']} {lay['d_unit']}" if lay["d"].strip() else "no thickness"
+        return f"Layer {i + 1}: {name}  ({d})"
+
+    def sweep_index(self):
+        """Index of the swept layer. The sweep follows the layer itself
+        (renames, moves), not a position or a text."""
+        obj = getattr(self, "_sweep_obj", None)
+        for i, lay in enumerate(self.layers[:-1]):
+            if lay is obj:
+                return i
+        return None
+
     def _refresh_sweep_layers(self):
-        vals = [f"{i + 1}: {l['material']}" for i, l in enumerate(self.layers[:-1])]
-        cur = self.sweep_layer.get()
+        cands = self.layers[:-1]
+        vals = [self._sweep_choice_text(i) for i in range(len(cands))]
         self.sweep_cb.config(values=vals)
-        if cur not in vals:
-            self.sweep_layer.set(vals[0] if vals else "")
+        i = self.sweep_index()
+        if i is None and cands:            # new stack, or the layer was deleted
+            i = 0
+            self._sweep_obj = cands[0]
+        self._setting_sweep = True
+        try:
+            self.sweep_layer.set(vals[i] if cands else "")
+        finally:
+            self._setting_sweep = False
         self.schedule_preview()
+        self.schedule_stack()
+
+    def _on_sweep_choice(self, _=None):
+        k = self.sweep_cb.current()
+        if 0 <= k < len(self.layers) - 1:
+            self._sweep_obj = self.layers[k]
+        self._refresh_sweep_layers()
 
     # --------------------------------------------------------------- run bar
     def _build_run_bar(self, parent):
         f = ttk.Frame(parent, padding=(4, 6))
         f.pack(side="bottom", fill="x")
-        self.run_btn = ttk.Button(f, text="▶ Run model (F5)", command=self.run_single)
+        self.run_btn = ttk.Button(f, text="▶ Run model (F5)", command=self.run_single,
+                                  style="Accent.TButton")
         self.run_btn.pack(side="left")
+        self.sweep_btn = ttk.Button(f, text="▶ Run sweep (F6)",
+                                    command=self.run_sweep, style="Accent.TButton")
+        self.sweep_btn.pack(side="left", padx=(4, 0))
+        Tooltip(self.sweep_btn, "Run the thickness sweep set up in the "
+                                "Thickness sweep tab, from any tab")
         self.cancel_btn = ttk.Button(f, text="Cancel", command=self.cancel,
                                      state="disabled")
         self.cancel_btn.pack(side="left", padx=4)
-        self.pbar = ttk.Progressbar(f, length=120, maximum=1.0)
-        self.pbar.pack(side="left", padx=6)
-        self.status = ttk.Label(f, text="ready", foreground=INK2)
-        self.status.pack(side="left")
+        self.pbar = ttk.Progressbar(f, length=100, maximum=1.0)
+        self.pbar.pack(side="left", padx=6, fill="x", expand=True)
+        # the status gets its own line so long messages (times) fit
+        self.status = ttk.Label(parent, text="ready", foreground=INK2,
+                                padding=(6, 0, 6, 4), anchor="w")
+        self.status.pack(side="bottom", fill="x", before=f)
+        self.status.bind("<Configure>", lambda e: self.status.config(
+            wraplength=max(200, e.width - 12)))
 
     # ----------------------------------------------------------------- plots
     def _build_plots(self, parent):
@@ -2312,6 +2468,15 @@ class App(tk.Tk):
                           values=["0", "3", "4", "5", "6"])
         cb.pack(side="left", padx=2)
         cb.bind("<<ComboboxSelected>>", lambda e: self.draw_drr())
+        ttk.Label(self.drr_panel.controls, text="Sweep colours").pack(
+            side="left", padx=(8, 0))
+        cb = ttk.Combobox(self.drr_panel.controls, textvariable=self.sweep_cmap,
+                          width=11, height=20, values=LINE_CMAPS)
+        cb.pack(side="left", padx=2)
+        cb.bind("<<ComboboxSelected>>", lambda e: self.draw_drr())
+        cb.bind("<Return>", lambda e: self.draw_drr())
+        Tooltip(cb, "Colour map for the curves of a thickness sweep (thin to "
+                    "thick). Any matplotlib colour map; add _r to reverse it.")
 
         self.comp_panel = PlotPanel(self.ptabs)
         self.comp_panel.redraw = self.draw_components
@@ -2381,10 +2546,11 @@ class App(tk.Tk):
         air = 0.12 * total
         x = 0.0
         self._stack_x = []
+        mark = self._sweep_marker()
         for i, (lay, w) in enumerate(zip(self.layers, widths)):
             name = lay["material"].strip() or "?"
-            col = self.material_color(lay["material"].strip(), order)
             sub = i == len(self.layers) - 1
+            col = self.material_color(lay["material"].strip(), order, substrate=sub)
             ax.add_patch(Rectangle((x, 0), w, 1, facecolor=col, alpha=.85,
                                    edgecolor="white", lw=2,
                                    hatch="///" if sub else None))
@@ -2393,8 +2559,11 @@ class App(tk.Tk):
             else:
                 d = ds[i]
                 txt = f"{name}\n{lay['d']} {lay['d_unit']}" if d else f"{name}\n? nm"
+            swept = mark is not None and i == mark["idx"] and not sub
+            if swept:
+                txt = f"{name}\n{mark['range']}"
             narrow = w / total < 0.07
-            if w / total < 0.02 and not sub:     # hairline: no room for a label
+            if w / total < 0.02 and not sub and not swept:   # hairline
                 txt = ""
             ax.text(x + w / 2, 0.5, txt, ha="center", va="center",
                     rotation=90 if narrow else 0, fontsize=8 if narrow else 9,
@@ -2404,6 +2573,12 @@ class App(tk.Tk):
             if i == self.sel:
                 ax.add_patch(Rectangle((x, -0.06), w, 1.12, fill=False,
                                        edgecolor=INK, lw=1.6))
+            if swept:
+                ax.add_patch(Rectangle((x + 0.01 * w, 0.02), 0.98 * w, 0.96,
+                                       fill=False, edgecolor=INK, lw=2.2,
+                                       ls=(0, (4, 2))))
+                ax.text(x + w / 2, 1.08, "◀ thickness swept ▶", ha="center",
+                        va="bottom", fontsize=8, fontweight="bold", color=INK)
             self._stack_x.append((x, x + w))
             x += w
         ax.annotate("", xy=(0, 0.5), xytext=(-air, 0.5),
@@ -2413,7 +2588,7 @@ class App(tk.Tk):
         ax.text(-air / 2, 0.38, "air", ha="center", va="top", fontsize=8,
                 color=INK2)
         ax.set_xlim(-air, total)
-        ax.set_ylim(-0.1, 1.1)
+        ax.set_ylim(-0.1, 1.25 if mark else 1.1)
         ax.set_yticks([])
         for s in ("left", "right", "top"):
             ax.spines[s].set_visible(False)
@@ -2423,18 +2598,67 @@ class App(tk.Tk):
         else:
             ax.set_xticks([])
             ax.spines["bottom"].set_visible(False)
-        ax.set_title(f"Sample stack ({len(self.layers)} layers, "
-                     f"{sum(d for d in ds if d):g} nm above the substrate; "
-                     f"widths: {mode.lower()})")
+        title = (f"Sample stack ({len(self.layers)} layers, "
+                 f"{sum(d for d in ds if d):g} nm above the substrate; "
+                 f"widths: {mode.lower()})")
+        if mark:
+            title += (f"\nThickness sweep{' (planned)' if mark['planned'] else ''}"
+                      f": {mark['title']} — {mark['range_long']}")
+        ax.set_title(title)
         p.finish()
 
-    def material_color(self, name, order=None):
-        """The user's colour for a material, else the default palette slot."""
+    def material_color(self, name, order=None, substrate=False):
+        """Colour of a layer in the stack diagram: the user's choice, else
+        the defaults (Ti thistle, Si3N4 paleturquoise, SiO2 darkkhaki,
+        substrate saddlebrown), else the next palette slot."""
+        if substrate:
+            return self.stack_colors.get(SUBSTRATE_KEY, SUBSTRATE_DEFAULT)
         if name in self.stack_colors:
             return self.stack_colors[name]
-        order = order or list(dict.fromkeys(l["material"].strip()
-                                            for l in self.layers))
+        if name in DEFAULT_MATERIAL_COLORS:
+            return DEFAULT_MATERIAL_COLORS[name]
+        order = [n for n in (order or dict.fromkeys(
+            l["material"].strip() for l in self.layers))
+            if n not in DEFAULT_MATERIAL_COLORS]
         return SERIES[order.index(name) % len(SERIES)] if name in order else SERIES[0]
+
+    def _sweep_marker(self):
+        """What to mark as swept on the stack diagram, or None.
+
+        While the Thickness sweep tab is open: the sweep being set up.
+        Otherwise, if the ΔR/R plot shows a sweep: the sweep as it was run.
+        """
+        planned = (hasattr(self, "sweep_tab")
+                   and self.tabs.select() == str(self.sweep_tab))
+        if planned:
+            idx = self.sweep_index()
+            if idx is None:
+                return None
+            try:
+                p = self._sweep_plan()
+                vals, unit = p["vals"], p["unit"]
+                step = float(self.sweep_step.get())
+            except (ValueError, TypeError):
+                return dict(idx=idx, planned=True, title=self.layer_title(idx),
+                            range="(range not valid yet)",
+                            range_long="range not valid yet")
+        else:
+            b = self.batches[-1] if self.batches else None
+            if not b or b.get("kind") != "sweep" or "sweep_idx" not in b:
+                return None
+            idx, vals, unit = b["sweep_idx"], b["sweep_vals"], b["sweep_unit"]
+            step = b.get("sweep_step")
+            if idx >= len(self.layers) - 1:
+                return None
+        n = len(vals)
+        rng = f"{vals[0]:g} → {vals[-1]:g} {unit}" if n > 1 else f"{vals[0]:g} {unit}"
+        step_txt = f" in steps of {step:g} {unit}" if step and n > 1 else ""
+        title = (self.layer_title(idx) if planned else
+                 f"{b.get('sweep_name') or self.layers[idx]['material']} "
+                 f"(layer {idx + 1})")
+        return dict(idx=idx, planned=planned, title=title,
+                    range=f"{rng}\n({n} runs)",
+                    range_long=f"{rng}{step_txt}, {n} runs")
 
     def edit_stack_colors(self):
         StackColorDialog(self)
@@ -2465,9 +2689,8 @@ class App(tk.Tk):
         if len(runs) == 1:
             return [SERIES[0]]
         if sweep or len(runs) > len(SERIES):
-            cmap = colormaps["Blues"]
-            return [cmap(0.35 + 0.65 * i / max(1, len(runs) - 1))
-                    for i in range(len(runs))]
+            name = self.sweep_cmap.get()
+            return cmap_colors(name if name in colormaps else "Blues", len(runs))
         return SERIES[:len(runs)]
 
     def draw_drr(self):
@@ -2645,6 +2868,7 @@ class App(tk.Tk):
             return
         self.batches = []
         self._refresh_run_list()
+        self.schedule_stack()
         self.draw_drr()
         self.redraw_run_plots()
 
@@ -2764,7 +2988,7 @@ class App(tk.Tk):
             if prep is None:
                 return
             cfg, stack, mats = prep
-            jobs.append(dict(label=f"{tag}: L{idx + 1} {name} = {v:g} {unit}",
+            jobs.append(dict(label=f"{tag}: {self.layer_title(idx)} = {v:g} {unit}",
                              cfg=cfg, stack=stack, materials=mats,
                              inputs=self._snapshot(layers),
                              sweep_value=v, sweep_unit=unit,
@@ -2775,7 +2999,10 @@ class App(tk.Tk):
         self.log("   " + self._describe_sweep(p).replace("\n", "\n   "))
         self._start(jobs, dict(kind="sweep", combined=p["cbase"],
                                figbase=p["figbase"],
-                               info=f"layer {idx + 1} ({name}) thickness"))
+                               info=f"{self.layer_title(idx)} thickness",
+                               sweep_idx=idx, sweep_name=name,
+                               sweep_vals=list(vals), sweep_unit=unit,
+                               sweep_step=float(self.sweep_step.get())))
 
     def _busy(self):
         if self.worker is not None and self.worker.is_alive():
@@ -2787,6 +3014,7 @@ class App(tk.Tk):
     def _start(self, jobs, batch):
         self.cancel_ev.clear()
         self.run_btn.config(state="disabled")
+        self.sweep_btn.config(state="disabled")
         self.cancel_btn.config(state="normal")
         self.pbar["value"] = 0
         opts = self._opts()
@@ -2885,6 +3113,7 @@ class App(tk.Tk):
 
     def _finish(self, kind, a, b):
         self.run_btn.config(state="normal")
+        self.sweep_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
         batch = self._pending
         total = time.perf_counter() - batch["t0"]
@@ -2912,6 +3141,7 @@ class App(tk.Tk):
         if batch["runs"]:
             self.batches.append(batch)
             self._refresh_run_list()
+            self.draw_stack()            # marks the swept layer (saved figures too)
             self.draw_drr()
             self.redraw_run_plots()
             if batch.get("figbase"):
@@ -3048,10 +3278,11 @@ class App(tk.Tk):
                                kernels=self.show_kernels.get(),
                                strain=self.show_strain.get(),
                                stack_mode=self.stack_mode.get(),
+                               sweep_cmap=self.sweep_cmap.get(),
                                stack_colors=self.stack_colors,
                                scale_exp=self.scale_exp.get(),
                                overlay=self.overlay.get()),
-                    sweep=dict(layer=self.sweep_layer.get(),
+                    sweep=dict(layer_index=self.sweep_index(),
                                start=self.sweep_start.get(),
                                end=self.sweep_end.get(),
                                step=self.sweep_step.get(),
@@ -3074,6 +3305,7 @@ class App(tk.Tk):
         self.show_kernels.set(pl.get("kernels", False))
         self.show_strain.set(pl.get("strain", False))
         self.stack_mode.set(pl.get("stack_mode", "Equal widths"))
+        self.sweep_cmap.set(pl.get("sweep_cmap", "Blues"))
         self.stack_colors = dict(pl.get("stack_colors", {}))
         self.scale_exp.set(pl.get("scale_exp", "3"))
         self.overlay.set(pl.get("overlay", False))
@@ -3100,8 +3332,15 @@ class App(tk.Tk):
         self.layers = st["layers"]
         self.sel = None
         self.refresh_tree(0)
-        if sw.get("layer") in self.sweep_cb.cget("values"):
-            self.sweep_layer.set(sw["layer"])
+        k = sw.get("layer_index")
+        if k is None and isinstance(sw.get("layer"), str):   # older sessions
+            try:
+                k = int(sw["layer"].split(":")[0]) - 1
+            except ValueError:
+                k = None
+        if isinstance(k, int) and 0 <= k < len(self.layers) - 1:
+            self._sweep_obj = self.layers[k]
+            self._refresh_sweep_layers()
         self._update_plot_tabs()
 
     def save_session(self):
@@ -3297,8 +3536,8 @@ def fmt_duration(sec):
     return f"{h} h {m:02d} min"
 
 
-def _dark(hex_color):
-    r, g, b = (int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+def _dark(color):
+    r, g, b = matplotlib.colors.to_rgb(color)
     return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.5
 
 
