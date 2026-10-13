@@ -206,6 +206,7 @@ To add a unit, add one entry to `UNITS` in `units.py`.
 
 Runs execute in the background with a progress bar and a Cancel button.
 
-The window uses the "Lavender fields" palette: cream #FDFBD4 panels,
-lavender #C1BFFF buttons and tabs, violet #CF6DFC for the Run buttons and the
-selected tab, olive #BDB96A frames and dividers. Plot areas stay white.
+The window uses the "Lavender fields" palette: light cream #FEFEDC panels,
+lavender #C1BFFF buttons and tabs, olive #BDB96A for the selected tab, frames
+and dividers, and violet #CF6DFC for the Run model / Run sweep buttons. Plot
+areas stay white.

@@ -46,13 +46,14 @@ SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
 INK, INK2, GRID_C, LIT_C = "#0b0b0b", "#52514e", "#d9d8d4", "#b35900"
 
 # "Lavender fields" palette for the window theme
-CREAM, OLIVE, LAVENDER, VIOLET = "#FDFBD4", "#BDB96A", "#C1BFFF", "#CF6DFC"
+# (background lightened from #FDFBD4 to #FEFEDC)
+CREAM, OLIVE, LAVENDER, VIOLET = "#FEFEDC", "#BDB96A", "#C1BFFF", "#CF6DFC"
 OLIVE_DARK = "#8a8640"          # olive, darkened for frame lines / hover
 
 
 def apply_theme(root):
     """Window theme from the palette: cream panels, lavender buttons and
-    tabs, violet for the Run buttons and the selected tab, olive frames.
+    tabs, olive for the selected tab and frames, violet for the Run buttons.
     Plot drawing areas stay white."""
     st = ttk.Style(root)
     try:
@@ -87,8 +88,8 @@ def apply_theme(root):
     st.configure("TNotebook", bordercolor=OLIVE, tabmargins=(2, 4, 2, 0))
     st.configure("TNotebook.Tab", background=LAVENDER, bordercolor=OLIVE,
                  lightcolor=LAVENDER, padding=(8, 3))
-    st.map("TNotebook.Tab", background=[("selected", VIOLET), ("active", "#d3d1ff")],
-           lightcolor=[("selected", VIOLET)])
+    st.map("TNotebook.Tab", background=[("selected", OLIVE), ("active", "#d3d1ff")],
+           lightcolor=[("selected", OLIVE)])
     for w in ("TEntry", "TCombobox", "TSpinbox"):
         st.configure(w, fieldbackground="white", background=LAVENDER,
                      bordercolor=OLIVE_DARK, arrowcolor=INK)
