@@ -27,6 +27,9 @@ matplotlib.use("TkAgg")
 from matplotlib import colormaps
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.transforms import blended_transform_factory
 from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg,
                                                NavigationToolbar2Tk)
 
@@ -129,6 +132,16 @@ matplotlib.rcParams.update({
 })
 
 _SUP = str.maketrans("0123456789-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻")
+
+
+def outside_legend(ax, fontsize=8):
+    """Legend outside the axes, to the right, one column: it never covers
+    the curves (the layout makes room for it)."""
+    leg = ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0),
+                    borderaxespad=0.0, ncols=1, fontsize=fontsize)
+    leg.set_draggable(True)
+    ax._diffr_outside_legend = True
+    return leg
 
 
 def drr_label(exp):
@@ -261,12 +274,51 @@ class PlotPanel(ttk.Frame):
         self.overrides = {}
         self.styles = {}            # axes index -> colour choices
         self.colorbars = []
+        self._sweep = None          # thickness colour bar of a sweep plot
+        # every save (toolbar button or automatic) keeps the plot's size
+        self._orig_savefig = self.fig.savefig
+        self.fig.savefig = self._savefig_keep_plot_size
         self.canvas.mpl_connect("scroll_event", self._on_scroll)
+
+    def _side_inches(self):
+        """Width (inches) that colour bars and outside legends take to the
+        right of the plots on screen."""
+        try:
+            self.canvas.draw()
+            r = self.canvas.get_renderer()
+        except Exception:
+            return 0.0
+        data = [a for a in self.data_axes() if a.axison]
+        if not data:
+            return 0.0
+        right = max(a.get_window_extent(r).x1 for a in data)
+        side = [cb.ax.get_window_extent(r).x1 for cb in self.colorbars]
+        side += [a.get_legend().get_window_extent(r).x1 for a in data
+                 if a.get_legend() is not None
+                 and getattr(a, "_diffr_outside_legend", False)]
+        if not side or max(side) <= right:
+            return 0.0
+        return (max(side) - right) / self.fig.dpi + 0.15
+
+    def _savefig_keep_plot_size(self, *args, **kw):
+        """Save with the colour bar / legend beside the plot without making
+        the plot smaller: the saved figure is widened by their width."""
+        extra = self._side_inches()
+        if extra <= 0:
+            return self._orig_savefig(*args, **kw)
+        w, h = self.fig.get_size_inches()
+        self.fig.set_size_inches(w + extra, h, forward=False)
+        try:
+            return self._orig_savefig(*args, **kw)
+        finally:
+            self.fig.set_size_inches(w, h, forward=False)
+            self.canvas.draw_idle()
 
     # --- drawing protocol: clear() ... draw your axes ... finish()
     def clear(self):
         self.fig.clear()
         self.colorbars = []
+        self._sweep = None
         return self.fig
 
     def finish(self):
@@ -304,7 +356,7 @@ class PlotPanel(ttk.Frame):
             if leg is not None:
                 leg.set_visible(o["legend"])
             elif o["legend"] and ax.get_legend_handles_labels()[0]:
-                ax.legend().set_draggable(True)
+                outside_legend(ax)
             fs = o["fontsize"]
             ax.title.set_fontsize(fs + 1)
             ax.xaxis.label.set_fontsize(fs)
@@ -349,11 +401,17 @@ class PlotPanel(ttk.Frame):
             if leg is not None:                 # legends copy the colours
                 fs = leg.get_texts()[0].get_fontsize() if leg.get_texts() else None
                 vis = leg.get_visible()
-                new = ax.legend(fontsize=fs, ncols=getattr(leg, "_ncols", 1))
-                new.set_draggable(True)
+                if getattr(ax, "_diffr_outside_legend", False):
+                    new = outside_legend(ax, fontsize=fs or 8)
+                else:
+                    new = ax.legend(fontsize=fs, ncols=getattr(leg, "_ncols", 1))
+                    new.set_draggable(True)
                 new.set_visible(vis)
         for cb in self.colorbars:
             cb.update_normal(cb.mappable)
+            fixed = getattr(cb, "_diffr_ticks", None)   # thickness labels
+            if fixed:
+                cb.set_ticks(fixed[0], labels=fixed[1])
 
     def edit_colors(self):
         axes = self.data_axes()
@@ -2667,6 +2725,14 @@ class App(tk.Tk):
         Tooltip(e, "Shift each thickness of a sweep by this amount (plotted "
                    "units) so the curves can be told apart. 0 = no offset.")
         self.ptabs.add(self.bg_panel, text="Background")
+        self._build_viewer()
+        for pnl in (self.drr_panel, self.bg_panel, self.viewer_panel):
+            pnl.canvas.mpl_connect("button_press_event",
+                                   lambda e, q=pnl: self._on_sweep_press(q, e))
+            pnl.canvas.mpl_connect("motion_notify_event",
+                                   lambda e, q=pnl: self._on_sweep_motion(q, e))
+            pnl.canvas.mpl_connect("button_release_event",
+                                   lambda e: setattr(self, "_viewer_drag", False))
         self._update_plot_tabs()
         self.draw_drr()
 
@@ -2884,6 +2950,90 @@ class App(tk.Tk):
         except ValueError:
             return 0.0
 
+    @staticmethod
+    def sweep_title(batch):
+        """'Thickness sweep of layer 4 (Si3N4) from 100 to 600 nm'."""
+        r = batch["runs"]
+        name = batch.get("sweep_name") or "?"
+        idx = batch.get("sweep_idx", 0)
+        unit = r[0].get("sweep_unit", "")
+        return (f"Thickness sweep of layer {idx + 1} ({name}) from "
+                f"{r[0]['sweep_value']:g} to {r[-1]['sweep_value']:g} {unit}")
+
+    def _add_sweep_cbar(self, fig, axes, batch, cols, cur=None):
+        """Thickness colour bar for a sweep plot (instead of a legend): one
+        colour block per thickness, hidden thicknesses hatched out, the
+        current one framed. Block i spans y = i ± 0.5 on the colour bar."""
+        runs = batch["runs"]
+        n = len(runs)
+        cmap = ListedColormap([matplotlib.colors.to_rgba(c) for c in cols])
+        sm = ScalarMappable(norm=BoundaryNorm(np.arange(n + 1) - 0.5, n), cmap=cmap)
+        cb = fig.colorbar(sm, ax=axes, fraction=0.05, pad=0.02, aspect=30)
+        cb.ax._diffr_cbar = True
+        step = max(1, int(np.ceil(n / 14)))
+        ticks = list(range(0, n, step))
+        if ticks[-1] != n - 1:
+            ticks.append(n - 1)
+        labels = [f"{runs[i]['sweep_value']:g}" for i in ticks]
+        cb.set_ticks(ticks, labels=labels)
+        cb._diffr_ticks = (ticks, labels)     # re-applied after restyling
+        unit = runs[0].get("sweep_unit", "")
+        cb.set_label(f"{batch.get('sweep_name', '')} (layer "
+                     f"{batch.get('sweep_idx', 0) + 1}) thickness ({unit})")
+        tr = blended_transform_factory(cb.ax.transAxes, cb.ax.transData)
+        for i in batch.setdefault("hidden", set()):
+            cb.ax.add_patch(Rectangle((0, i - 0.5), 1, 1, transform=tr,
+                                      facecolor="white", alpha=.8, hatch="xxx",
+                                      edgecolor=INK2, lw=0, zorder=5))
+        if cur is not None:
+            cb.ax.add_patch(Rectangle((0, cur - 0.5), 1, 1, transform=tr,
+                                      fill=False, edgecolor=INK, lw=2.4,
+                                      clip_on=False, zorder=6))
+        return cb
+
+    def _register_sweep_cbar(self, panel, cb, batch):
+        panel.colorbars.append(cb)
+        panel._sweep = dict(cbar_ax=cb.ax, batch=batch)
+
+    def _on_sweep_press(self, panel, e):
+        """Right-click on a thickness in the colour bar hides/shows it in all
+        sweep plots. In the Sweep viewer, left-click/drag picks the thickness
+        shown."""
+        info = panel._sweep
+        if info is None or panel.toolbar.mode or e.ydata is None:
+            return
+        on_cbar = e.inaxes is info["cbar_ax"]
+        on_map = (panel is getattr(self, "viewer_panel", None)
+                  and e.inaxes is not None and e.inaxes is info.get("map_ax"))
+        if not (on_cbar or on_map):
+            return
+        batch = info["batch"]
+        i = int(round(e.ydata))
+        if not 0 <= i < len(batch["runs"]):
+            return
+        if e.button == 3:
+            hidden = batch.setdefault("hidden", set())
+            hidden.symmetric_difference_update({i})
+            if len(hidden) == len(batch["runs"]):
+                hidden.discard(i)            # keep at least one
+            self._redraw_sweep_plots()
+        elif e.button == 1 and panel is getattr(self, "viewer_panel", None):
+            self._viewer_drag = True
+            self._viewer_pick(i)
+
+    def _on_sweep_motion(self, panel, e):
+        if not getattr(self, "_viewer_drag", False) or e.ydata is None:
+            return
+        info = panel._sweep
+        if info and e.inaxes in (info["cbar_ax"], info.get("map_ax")):
+            self._viewer_pick(int(round(e.ydata)))
+
+    def _redraw_sweep_plots(self):
+        self.draw_drr()
+        if self._bg_shown():
+            self.draw_background()
+        self.draw_viewer()
+
     def _run_colors(self, runs, sweep):
         if len(runs) == 1:
             return [SERIES[0]]
@@ -2922,12 +3072,15 @@ class App(tk.Tk):
                 tag[id(b)] = f"  [inputs {chr(65 + fps.index(keys[id(b)]))}]"
         n_sub = 0
         cols = self._run_colors(runs, sweep)
+        hidden = batches[0].setdefault("hidden", set()) if sweep else set()
         k = 0
         for b in batches:
             for r in b["runs"]:
                 res, c, sh = r["res"], cols[k], k * off
                 lab = r["label"] + tag.get(id(b), "")
                 k += 1
+                if k - 1 in hidden:
+                    continue
                 bg = res.get("bg")
                 if mode == "original ΔR/R" or not bg:
                     ax.plot(res["t_ps"], res["drr"] * 10 ** exp + sh, color=c,
@@ -2945,15 +3098,24 @@ class App(tk.Tk):
         ax.set_xlabel("delay (ps)")
         ax.set_ylabel(drr_label(exp) + (f"  (curves offset by {off:g})"
                                          if off and len(runs) > 1 else ""))
-        ax.set_title("Modelled differential reflectivity"
-                     + (f" — sweep of {batches[0]['info']}" if sweep else "")
-                     + (" — background subtracted" if n_sub and mode ==
-                        "background-subtracted" else "")
-                     + ("\nOverlaid runs come from different inputs: compare "
-                        "only runs with the same [inputs …] tag" if tag else ""))
+        sub_txt = (" — background subtracted" if n_sub and mode ==
+                   "background-subtracted" else
+                   " — faint: original, solid: background subtracted"
+                   if n_sub and mode == "both" else "")
+        if sweep:
+            ax.set_title(self.sweep_title(batches[0]) + sub_txt
+                         + (f"\n{len(hidden)} thickness(es) hidden — right-click "
+                            f"the colour bar to show them" if hidden else ""))
+            cb = self._add_sweep_cbar(p.fig, ax, batches[0], cols)
+            self._register_sweep_cbar(p, cb, batches[0])
+        else:
+            ax.set_title("Modelled differential reflectivity" + sub_txt
+                         + ("\nOverlaid runs come from different inputs: "
+                            "compare only runs with the same [inputs …] tag"
+                            if tag else ""))
         ax.grid(alpha=.6)
-        if len(runs) > 1 or (n_sub and mode == "both"):
-            ax.legend(fontsize=8, ncols=2 if len(runs) > 8 else 1).set_draggable(True)
+        if not sweep and (len(runs) > 1 or (n_sub and mode == "both")):
+            outside_legend(ax)
         p.finish()
 
     def draw_components(self):
@@ -2977,7 +3139,7 @@ class App(tk.Tk):
         ax.set_title(f"Components of ΔR/R — {self.view_run.get()} "
                      f"(first {zoom:g} ps; zoom out with the toolbar)")
         ax.grid(alpha=.6)
-        ax.legend(fontsize=8).set_draggable(True)
+        outside_legend(ax)
         p.finish()
 
     def draw_kernels(self):
@@ -3043,7 +3205,331 @@ class App(tk.Tk):
                            (self.out["bg_enabled"], self.bg_panel)):
             if var.get():
                 panel.redraw()
+        self.draw_viewer()
         self._update_bg_result()
+
+    # ---------------------------------------------------------- sweep viewer
+    VIEWER_MODES = ["Current curve only", "Current + others faint",
+                    "All shown curves"]
+    VIEWER_SIGNALS = ["ΔR/R − background", "ΔR/R"]
+
+    def _build_viewer(self):
+        vp = self.viewer_panel = PlotPanel(self.ptabs)
+        vp.redraw = self.draw_viewer
+        self.ptabs.add(vp, text="Sweep viewer")
+        self.viewer_view = tk.StringVar(value="Curves")
+        self.viewer_mode = tk.StringVar(value=self.VIEWER_MODES[0])
+        self.viewer_signal = tk.StringVar(value=self.VIEWER_SIGNALS[0])
+        self.viewer_fps = tk.StringVar(value="4")
+        self.viewer_loop = tk.BooleanVar(value=True)
+        self.viewer_cur, self._viewer_bid = 0, None
+        self._viewer_drag, self._play_job, self._viewer_job = False, None, None
+        self._viewer_setting = False
+        r = vp.row2
+        for lab, var, vals, w in (("View", self.viewer_view,
+                                   ["Curves", "Map (time × thickness)"], 20),
+                                  ("Show", self.viewer_mode, self.VIEWER_MODES, 21),
+                                  ("Signal", self.viewer_signal,
+                                   self.VIEWER_SIGNALS, 17)):
+            ttk.Label(r, text=lab).pack(side="left", padx=(6, 2))
+            cb = ttk.Combobox(r, textvariable=var, values=vals, state="readonly",
+                              width=w)
+            cb.pack(side="left")
+            cb.bind("<<ComboboxSelected>>", lambda e: self.draw_viewer())
+        self._info(r, "sweep_viewer").pack(side="left", padx=6)
+        r3 = ttk.Frame(vp, padding=(4, 0, 4, 2))
+        r3.pack(side="top", fill="x", before=vp.canvas.get_tk_widget())
+        self.play_btn = ttk.Button(r3, text="▶ Play", command=self.toggle_play,
+                                   style="Accent.TButton")
+        self.play_btn.pack(side="left")
+        ttk.Label(r3, text="frames/s").pack(side="left", padx=(8, 2))
+        ttk.Spinbox(r3, from_=1, to=30, textvariable=self.viewer_fps,
+                    width=4).pack(side="left")
+        ttk.Checkbutton(r3, text="loop", variable=self.viewer_loop).pack(
+            side="left", padx=6)
+        ttk.Button(r3, text="Show all thicknesses",
+                   command=self._viewer_show_all).pack(side="left", padx=6)
+        ttk.Button(r3, text="Save GIF…", command=self.save_gif).pack(
+            side="left", padx=6)
+        sf = ttk.Frame(vp, padding=(6, 2, 6, 4))
+        sf.pack(side="bottom", fill="x", before=vp.canvas.get_tk_widget())
+        self.viewer_scale = ttk.Scale(sf, from_=0, to=1, orient="horizontal",
+                                      command=self._on_viewer_slide)
+        self.viewer_scale.pack(side="left", fill="x", expand=True)
+        self.viewer_pos_lbl = ttk.Label(sf, width=26, anchor="e")
+        self.viewer_pos_lbl.pack(side="left", padx=6)
+        ttk.Label(vp, foreground=INK2, padding=(6, 0, 6, 2), text=(
+            "Drag on the thickness colour bar (or the map, or the slider) to "
+            "step through the sweep; right-click a colour to hide/show that "
+            "thickness; ← → keys step one thickness.")).pack(
+            side="bottom", fill="x", before=sf)
+        self.bind_all("<Left>", lambda e: self._viewer_key(e, -1), add="+")
+        self.bind_all("<Right>", lambda e: self._viewer_key(e, 1), add="+")
+
+    def _viewer_batch(self):
+        b = self._batch_of_selected()
+        if b is not None and b["kind"] == "sweep" and len(b["runs"]) > 1:
+            return b
+        for b in reversed(self.batches):
+            if b["kind"] == "sweep" and len(b["runs"]) > 1:
+                return b
+        return None
+
+    @staticmethod
+    def _visible(batch):
+        hidden = batch.setdefault("hidden", set())
+        return [i for i in range(len(batch["runs"])) if i not in hidden]
+
+    def _viewer_uses_bg(self, batch):
+        """Background-subtracted data by default, when the sweep has it."""
+        return (self.viewer_signal.get() == self.VIEWER_SIGNALS[0]
+                and any(r["res"].get("bg") for r in batch["runs"]))
+
+    def _draw_viewer_frame(self, fig, batch, cur):
+        """Draw one frame (screen and GIF). Returns the colour bars/axes."""
+        runs = batch["runs"]
+        n = len(runs)
+        vis = self._visible(batch)
+        exp = int(self.scale_exp.get())
+        k = 10 ** exp
+        use_bg = self._viewer_uses_bg(batch)
+        sig = (lambda r: r["res"]["bg"]["sub"] if r["res"].get("bg") else None) \
+            if use_bg else (lambda r: r["res"]["drr"])
+        cols = self._run_colors(runs, True)
+        unit = runs[0].get("sweep_unit", "")
+        t = runs[0]["res"]["t_ps"]
+        ylab = drr_label(exp) + (" − background" if use_bg else "")
+        note = ""
+        if (self.viewer_signal.get() == self.VIEWER_SIGNALS[0] and not use_bg):
+            note = "  (no background fit in this sweep: original ΔR/R shown)"
+        head = (f"{self.sweep_title(batch)}\nshowing "
+                f"{runs[cur]['sweep_value']:g} {unit}  "
+                f"({vis.index(cur) + 1} of {len(vis)})" + note)
+        if self.viewer_view.get().startswith("Map"):
+            ax = fig.add_subplot()
+            Z = np.full((n, t.size), np.nan)
+            for i in vis:
+                s_ = sig(runs[i])
+                if s_ is not None:
+                    Z[i] = s_ * k
+            fin = Z[np.isfinite(Z)]
+            lo, hi = (np.percentile(fin, [1, 99]) if fin.size else (0.0, 1.0))
+            if hi <= lo:
+                hi = lo + 1e-12
+            im = ax.imshow(Z, aspect="auto", origin="lower", cmap="viridis",
+                           extent=[t[0], t[-1], -0.5, n - 0.5], vmin=lo, vmax=hi,
+                           interpolation="nearest")
+            ax.axhline(cur, color="white", lw=2.6, gid="ref")
+            ax.axhline(cur, color=INK, lw=1.2, gid="ref")
+            step = max(1, int(np.ceil(n / 14)))
+            ticks = list(range(0, n, step))
+            ax.set_yticks(ticks, [f"{runs[i]['sweep_value']:g}" for i in ticks])
+            ax.set_ylabel(f"{batch.get('sweep_name', '')} thickness ({unit})")
+            ax.set_xlabel("delay (ps)")
+            ax.set_title(head)
+            cbi = fig.colorbar(im, ax=ax, fraction=0.05, pad=0.02)
+            cbi.ax._diffr_cbar = True
+            cbi.set_label(ylab)
+            return dict(cb=None, img_cb=cbi, map_ax=ax)
+        ax = fig.add_subplot()
+        curves = {i: sig(runs[i]) for i in vis}
+        allv = [c * k for c in curves.values() if c is not None]
+        if allv:
+            lo = float(np.nanmin([np.nanmin(c) for c in allv]))
+            hi = float(np.nanmax([np.nanmax(c) for c in allv]))
+            pad = 0.05 * (hi - lo or abs(hi) or 1.0)
+            ax.set_ylim(lo - pad, hi + pad)       # fixed: the curve moves, not the axes
+        mode = self.viewer_mode.get()
+        if mode != self.VIEWER_MODES[0]:
+            for i in vis:
+                if i == cur or curves[i] is None:
+                    continue
+                if mode == self.VIEWER_MODES[1]:
+                    ax.plot(t, curves[i] * k, color="#c8c8c8", lw=0.8)
+                else:
+                    ax.plot(t, curves[i] * k, color=cols[i], lw=1.0, alpha=.85)
+        if curves.get(cur) is not None:
+            ax.plot(t, curves[cur] * k, color=cols[cur],
+                    lw=2.2 if mode != self.VIEWER_MODES[0] else 1.6)
+        else:
+            ax.text(0.5, 0.5, "no background fit for this thickness",
+                    transform=ax.transAxes, ha="center", color=LIT_C)
+        ax.axhline(0, color=GRID_C, lw=.8, zorder=0, gid="ref")
+        ax.set_xlim(t[0], t[-1])
+        ax.set_xlabel("delay (ps)")
+        ax.set_ylabel(ylab)
+        ax.set_title(head)
+        ax.grid(alpha=.6)
+        cb = self._add_sweep_cbar(fig, ax, batch, cols, cur=cur)
+        return dict(cb=cb, img_cb=None, map_ax=None)
+
+    def draw_viewer(self):
+        self._viewer_job = None
+        p = self.viewer_panel
+        batch = self._viewer_batch()
+        if batch is None:
+            p.empty("Run a thickness sweep: its curves can then be stepped "
+                    "through here one at a time, like a video.")
+            self._viewer_scale_update([], 0)
+            return
+        if id(batch) != self._viewer_bid:
+            self._viewer_bid, self.viewer_cur = id(batch), 0
+        vis = self._visible(batch)
+        if self.viewer_cur not in vis:
+            self.viewer_cur = min(vis, key=lambda i: abs(i - self.viewer_cur))
+        fig = p.clear()
+        d = self._draw_viewer_frame(fig, batch, self.viewer_cur)
+        if d["cb"] is not None:
+            self._register_sweep_cbar(p, d["cb"], batch)
+        else:
+            p.colorbars.append(d["img_cb"])
+            p._sweep = dict(cbar_ax=None, batch=batch)
+        p._sweep["map_ax"] = d["map_ax"]
+        p.finish()
+        self._viewer_scale_update(vis, self.viewer_cur, batch)
+
+    def _viewer_scale_update(self, vis, cur, batch=None):
+        self._viewer_setting = True
+        try:
+            self.viewer_scale.configure(to=max(1, len(vis) - 1))
+            self.viewer_scale.set(vis.index(cur) if cur in vis else 0)
+        finally:
+            self._viewer_setting = False
+        if batch is None or not vis:
+            self.viewer_pos_lbl.config(text="")
+            return
+        r = batch["runs"][cur]
+        self.viewer_pos_lbl.config(text=f"{r['sweep_value']:g} {r['sweep_unit']}"
+                                        f"  ({vis.index(cur) + 1} of {len(vis)})")
+
+    def _schedule_viewer_draw(self):
+        if self._viewer_job is None:
+            self._viewer_job = self.after_idle(self.draw_viewer)
+
+    def _viewer_pick(self, i):
+        batch = self._viewer_batch()
+        if batch is None:
+            return
+        vis = self._visible(batch)
+        i = min(max(i, 0), len(batch["runs"]) - 1)
+        if i not in vis:
+            i = min(vis, key=lambda j: abs(j - i))
+        if i != self.viewer_cur:
+            self.viewer_cur = i
+            self._schedule_viewer_draw()
+
+    def _on_viewer_slide(self, v):
+        if self._viewer_setting:
+            return
+        batch = self._viewer_batch()
+        if batch is None:
+            return
+        vis = self._visible(batch)
+        pos = min(max(int(round(float(v))), 0), len(vis) - 1)
+        self._viewer_pick(vis[pos])
+
+    def _viewer_key(self, e, step):
+        w = self.focus_get()
+        if isinstance(w, (ttk.Entry, ttk.Spinbox, ttk.Combobox, tk.Entry, tk.Text)):
+            return
+        if self.ptabs.select() != str(self.viewer_panel):
+            return
+        batch = self._viewer_batch()
+        if batch is None:
+            return
+        vis = self._visible(batch)
+        pos = vis.index(self.viewer_cur) if self.viewer_cur in vis else 0
+        self._viewer_pick(vis[min(max(pos + step, 0), len(vis) - 1)])
+
+    def _viewer_show_all(self):
+        b = self._viewer_batch()
+        if b is not None:
+            b["hidden"] = set()
+            self._redraw_sweep_plots()
+
+    def toggle_play(self):
+        if self._play_job is not None:
+            self._stop_play()
+            return
+        if self._viewer_batch() is None:
+            return
+        self.play_btn.config(text="⏸ Pause")
+        self._play_job = self.after(10, self._play_step)
+
+    def _stop_play(self):
+        if getattr(self, "_play_job", None) is not None:
+            self.after_cancel(self._play_job)
+        self._play_job = None
+        if hasattr(self, "play_btn"):
+            self.play_btn.config(text="▶ Play")
+
+    def _play_step(self):
+        batch = self._viewer_batch()
+        if batch is None:
+            return self._stop_play()
+        vis = self._visible(batch)
+        pos = vis.index(self.viewer_cur) if self.viewer_cur in vis else -1
+        if pos + 1 >= len(vis):
+            if not self.viewer_loop.get():
+                return self._stop_play()
+            pos = -1
+        self.viewer_cur = vis[pos + 1]
+        t0 = time.perf_counter()
+        self.draw_viewer()
+        try:
+            fps = min(max(float(self.viewer_fps.get()), 0.2), 30.0)
+        except ValueError:
+            fps = 4.0
+        spent = (time.perf_counter() - t0) * 1000
+        # never faster than the drawing allows, and always leave the window
+        # time to react to clicks
+        self._play_job = self.after(max(int(1000 / fps - spent), 30),
+                                    self._play_step)
+
+    def save_gif(self):
+        """The shown thicknesses as an animated GIF (one frame each)."""
+        batch = self._viewer_batch()
+        if batch is None:
+            messagebox.showinfo("Save GIF", "Run a thickness sweep first.")
+            return
+        from matplotlib.animation import PillowWriter
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        r = batch["runs"]
+        unit = S.FILE_UNIT_NAMES.get(r[0]["sweep_unit"], r[0]["sweep_unit"])
+        name = S.format_name(f"sweep_{batch.get('sweep_name', 'layer')}_"
+                             f"{r[0]['sweep_value']:g}-{r[-1]['sweep_value']:g}"
+                             f"{unit}")
+        path = filedialog.asksaveasfilename(
+            title="Save the sweep as an animated GIF", defaultextension=".gif",
+            initialdir=self.out["folder"].get() or None,
+            initialfile=name + ".gif", filetypes=[("GIF animation", "*.gif")])
+        if not path:
+            return
+        try:
+            fps = min(max(float(self.viewer_fps.get()), 0.2), 30.0)
+        except ValueError:
+            fps = 4.0
+        w, h = self.viewer_panel.fig.get_size_inches()
+        fig = Figure(figsize=(w, h), dpi=100, layout="constrained")
+        FigureCanvasAgg(fig)
+        vis = self._visible(batch)
+        t0 = time.perf_counter()
+        self.config(cursor="watch")
+        self.update_idletasks()
+        try:
+            writer = PillowWriter(fps=fps)
+            with writer.saving(fig, path, dpi=100):
+                for i in vis:
+                    fig.clear()
+                    self._draw_viewer_frame(fig, batch, i)
+                    writer.grab_frame()
+        except Exception as e:
+            messagebox.showerror("Save GIF", f"{type(e).__name__}: {e}")
+            return
+        finally:
+            self.config(cursor="")
+        self.log(f"written: {path} ({len(vis)} frames at {fps:g} frames/s, "
+                 f"{fmt_duration(time.perf_counter() - t0)})")
 
     def _batch_of_selected(self):
         lab = self.view_run.get()
@@ -3084,7 +3570,7 @@ class App(tk.Tk):
                      + (f"  (fit on t > {bg['cut_ps']:g} ps, dotted line)"
                         if bg["cut_ps"] is not None else ""))
         ax.grid(alpha=.6)
-        ax.legend(fontsize=8).set_draggable(True)
+        outside_legend(ax)
         p.finish()
 
     def _draw_background_sweep(self, batch):
@@ -3101,13 +3587,14 @@ class App(tk.Tk):
         k = 10 ** exp
         off = self._offset_value(self.bg_offset)
         cols = self._run_colors(runs, True)
+        hidden = batch.setdefault("hidden", set())
         fig = p.clear()
         ax1, ax2 = fig.subplots(2, 1, sharex=True)
         cut = None
         for n, (r, c) in enumerate(zip(runs, cols)):
             res, bg = r["res"], r["res"].get("bg")
             lab = r["label"].split(": ", 1)[-1]
-            if not bg:
+            if not bg or n in hidden:
                 continue
             sh = n * off
             ax1.plot(res["t_ps"], res["drr"] * k + sh, color=c, lw=1.1, label=lab)
@@ -3125,12 +3612,13 @@ class App(tk.Tk):
         ax1.set_ylabel(drr_label(exp) + shift)
         ax2.set_ylabel(drr_label(exp) + " − bg" + shift)
         ax2.set_xlabel("delay (ps)")
-        ax1.set_title(f"Background fits — sweep of {batch['info']}\n"
+        ax1.set_title(f"{self.sweep_title(batch)} — background fits\n"
                       f"solid: data, dashed: fitted background"
                       + (f", dotted line: fit starts at t = {cut:g} ps"
                          if cut is not None else ""), fontsize=9)
         ax2.set_title("ΔR/R − background")
-        ax2.legend(fontsize=7, ncols=2 if len(runs) > 6 else 1).set_draggable(True)
+        cb = self._add_sweep_cbar(fig, [ax1, ax2], batch, cols)
+        self._register_sweep_cbar(p, cb, batch)
         missing = len(runs) - len(fitted)
         if missing:
             ax2.text(0.01, 0.02, f"{missing} run(s) without a fit (see the log)",
@@ -3314,8 +3802,9 @@ class App(tk.Tk):
         what = ("the sweep" if batch.get("kind") == "sweep" else "the run")
         msg = (f"Running {what}…\nThe plots appear here when it has "
                f"finished (earlier runs stay under 'Show run').")
+        self._stop_play()
         for panel in (self.drr_panel, self.comp_panel, self.kern_panel,
-                      self.strain_panel, self.bg_panel):
+                      self.strain_panel, self.bg_panel, self.viewer_panel):
             panel.empty(msg)
         if hasattr(self, "bg_result"):
             self.bg_result.config(text="Running…")
@@ -3840,13 +4329,14 @@ class App(tk.Tk):
 
 # figure-file suffix -> panel, for saving figures and plot styles
 FIGURE_PANELS = ("dRR", "stack", "components", "kernels", "strain_map",
-                 "background")
+                 "background", "sweep_viewer")
 
 
 def FIGURE_PANELS_MAP(app):
     return {"dRR": app.drr_panel, "stack": app.stack_panel,
             "components": app.comp_panel, "kernels": app.kern_panel,
-            "strain_map": app.strain_panel, "background": app.bg_panel}
+            "strain_map": app.strain_panel, "background": app.bg_panel,
+            "sweep_viewer": app.viewer_panel}
 
 
 def fmt_duration(sec):

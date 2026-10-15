@@ -184,6 +184,30 @@ Clicking the text of a checkbox still just ticks or unticks it.
   session. *Sweep colours* on the ΔR/R plot picks the colour map for a
   sweep's curves from all matplotlib colour maps (Blues, ocean, bwr,
   viridis, coolwarm, …; add `_r` to reverse one).
+- **Sweep plots — thickness colour bar instead of a legend**: a sweep's
+  ΔR/R and Background plots carry a colour bar of the swept thickness (one
+  colour block per thickness) and the title "Thickness sweep of layer n
+  (material) from a to b unit". **Right-click** a block to hide that
+  thickness (hatched) in every sweep plot; right-click again to show it.
+  Hidden thicknesses stay hidden when the plot redraws. Plots of single
+  runs keep a one-column legend placed to the right of the plot, so it
+  never covers the curves (drag it to move it).
+- **Saving a plot** (toolbar save button): the colour bar or legend sits in
+  its own strip to the right. The saved image is made wider for it, so the
+  plot area keeps the size it has on screen.
+- **Sweep viewer** (tab next to *Background*, filled after a sweep): steps
+  through the sweep one thickness at a time.
+  - *Signal*: ΔR/R − background by default (when the background
+    subtraction ran), or plain ΔR/R.
+  - *Show*: current curve only, current + the others faint, or all shown
+    curves. The y range stays fixed while stepping, so amplitudes compare.
+  - *View*: curves, or a map (delay × thickness, colour = signal).
+  - Pick the thickness by **dragging the mouse along the thickness colour
+    bar** (or along the map), with the slider, or with the ← → keys.
+    *Play* runs through it like a video (frames/s, loop). *Show all
+    thicknesses* un-hides everything.
+  - *Save GIF…* writes the shown thicknesses as an animated GIF, one frame
+    each, at the chosen frames/s.
 - **Offsets**: curves are plotted without any offset unless you ask for one.
   *Offset* under the ΔR/R plot (and under the Background plot) shifts curve
   n up by n × offset, in the plotted units, so overlapping curves can be
