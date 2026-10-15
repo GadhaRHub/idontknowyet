@@ -119,7 +119,10 @@ To add a unit, add one entry to `UNITS` in `units.py`.
     subtracted.
   - The fit parameters are printed in the log and in the tab ("Exponential
     fit params: a=…, b=…, c=…, d=…", or "fit failed — mean subtracted
-    instead"). A *Background* plot tab shows data, fit and subtracted trace.
+    instead"). A *Background* plot tab shows data, fit and subtracted trace
+    for a single run; for a finished sweep it shows all thicknesses (data
+    with dashed fitted background above, ΔR/R − background below, in the
+    sweep colours, with its own offset box).
     The main ΔR/R plot can show the original, the subtracted trace, or both.
   - *Fit selected run now* / *Re-fit all runs* apply changed settings to
     runs already in memory. Files already saved are not rewritten.
@@ -167,7 +170,21 @@ To add a unit, add one entry to `UNITS` in `units.py`.
   any of them, the substrate included; the colours are saved with the
   session. *Sweep colours* on the ΔR/R plot picks the colour map for a
   sweep's curves from all matplotlib colour maps (Blues, ocean, bwr,
-  viridis, coolwarm, …; add `_r` to reverse one). Tick *Components*, *Kernels & absorption*
+  viridis, coolwarm, …; add `_r` to reverse one).
+- **Offsets**: curves are plotted without any offset unless you ask for one.
+  *Offset* under the ΔR/R plot (and under the Background plot) shifts curve
+  n up by n × offset, in the plotted units, so overlapping curves can be
+  told apart. The y label says when an offset is applied. Saved data are
+  never offset.
+- **No stale results**: when a run or sweep starts, the result plots are
+  cleared ("Running…") until the new results are in. Earlier runs stay
+  available under *Show run*. Every run is computed only from the inputs
+  at the moment you press Run: a sample run after another sample gives the
+  same numbers as in a fresh session (tested). With *Overlay all runs*,
+  runs made from different inputs (another sample, fluence, wavelength, …)
+  are tagged `[inputs A]`, `[inputs B]`, … and the title warns about it.
+  The swept-layer marking on the stack diagram is shown only while the
+  stack is the one that was swept. Tick *Components*, *Kernels & absorption*
   or *Strain map η(z,t)* for more tabs (the strain map must be ticked before
   the run). Every plot has the matplotlib toolbar (zoom, pan, home, back,
   save image), mouse-wheel zoom, and *Axes & labels…* for the title, axis

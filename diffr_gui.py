@@ -11,6 +11,7 @@ Needs numpy and matplotlib; tkinter ships with Python.
 """
 
 import copy
+import json
 import os
 import queue
 import threading
@@ -250,6 +251,10 @@ class PlotPanel(ttk.Frame):
             except tk.TclError:
                 pass
         self.toolbar.pack(side="left", fill="x", expand=True)
+        # second row for plot-specific settings (scale, offset, colour map),
+        # so the toolbar keeps its room; empty rows take no space
+        self.row2 = ttk.Frame(self, padding=(4, 0, 4, 2))
+        self.row2.pack(side="top", fill="x")
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self.overrides = {}
         self.styles = {}            # axes index -> colour choices
@@ -980,6 +985,10 @@ class App(tk.Tk):
         self.scale_exp = tk.StringVar(value="3")
         self.stack_mode = tk.StringVar(value="Equal widths")
         self.sweep_cmap = tk.StringVar(value="Blues")
+        self.drr_offset = tk.StringVar(value="0")
+        self.bg_offset = tk.StringVar(value="0")
+        for v in (self.drr_offset, self.bg_offset):
+            v.trace_add("write", lambda *_: self._schedule_offset_redraw())
         self.stack_colors = {}          # material name -> "#rrggbb" chosen by the user
         self.view_run = tk.StringVar()
 
@@ -2463,15 +2472,24 @@ class App(tk.Tk):
         self.drr_panel = PlotPanel(main, figsize=(8, 4.5))
         self.drr_panel.redraw = self.draw_drr
         main.add(self.drr_panel, weight=3)
-        ttk.Label(self.drr_panel.controls, text="y scale").pack(side="left")
-        cb = ttk.Combobox(self.drr_panel.controls, textvariable=self.scale_exp,
+        ttk.Label(self.drr_panel.row2, text="y scale").pack(side="left")
+        cb = ttk.Combobox(self.drr_panel.row2, textvariable=self.scale_exp,
                           state="readonly", width=4,
                           values=["0", "3", "4", "5", "6"])
         cb.pack(side="left", padx=2)
         cb.bind("<<ComboboxSelected>>", lambda e: self.draw_drr())
-        ttk.Label(self.drr_panel.controls, text="Sweep colours").pack(
-            side="left", padx=(8, 0))
-        cb = ttk.Combobox(self.drr_panel.controls, textvariable=self.sweep_cmap,
+        ttk.Label(self.drr_panel.row2, text="Offset").pack(side="left",
+                                                            padx=(12, 0))
+        e = ttk.Entry(self.drr_panel.row2, textvariable=self.drr_offset,
+                      width=6)
+        e.pack(side="left", padx=2)
+        Tooltip(e, "Shift each curve by this amount (in the plotted units, "
+                   "i.e. after the y scale) so overlapping curves can be told "
+                   "apart: curve n is moved up by n × offset. 0 = no offset. "
+                   "The saved data are never offset.")
+        ttk.Label(self.drr_panel.row2, text="Sweep colours").pack(
+            side="left", padx=(12, 0))
+        cb = ttk.Combobox(self.drr_panel.row2, textvariable=self.sweep_cmap,
                           width=11, height=20, values=LINE_CMAPS)
         cb.pack(side="left", padx=2)
         cb.bind("<<ComboboxSelected>>", lambda e: self.draw_drr())
@@ -2490,6 +2508,12 @@ class App(tk.Tk):
         self.ptabs.add(self.strain_panel, text="Strain map")
         self.bg_panel = PlotPanel(self.ptabs)
         self.bg_panel.redraw = self.draw_background
+        ttk.Label(self.bg_panel.row2, text="Offset").pack(side="left")
+        e = ttk.Entry(self.bg_panel.row2, textvariable=self.bg_offset,
+                      width=6)
+        e.pack(side="left", padx=2)
+        Tooltip(e, "Shift each thickness of a sweep by this amount (plotted "
+                   "units) so the curves can be told apart. 0 = no offset.")
         self.ptabs.add(self.bg_panel, text="Background")
         self._update_plot_tabs()
         self.draw_drr()
@@ -2651,6 +2675,9 @@ class App(tk.Tk):
             step = b.get("sweep_step")
             if idx >= len(self.layers) - 1:
                 return None
+            # only while the stack on screen is the one that was swept
+            if b.get("stack_fp") != self._fingerprint(skip_d=idx, stack_only=True):
+                return None
         n = len(vals)
         rng = f"{vals[0]:g} → {vals[-1]:g} {unit}" if n > 1 else f"{vals[0]:g} {unit}"
         step_txt = f" in steps of {step:g} {unit}" if step and n > 1 else ""
@@ -2686,6 +2713,25 @@ class App(tk.Tk):
                 return r["res"]
         return None
 
+    def _schedule_offset_redraw(self):
+        if getattr(self, "_offset_job", None):
+            self.after_cancel(self._offset_job)
+        self._offset_job = self.after(400, self._offset_redraw)
+
+    def _offset_redraw(self):
+        self._offset_job = None
+        self.draw_drr()
+        if self._bg_shown():
+            self.draw_background()
+
+    @staticmethod
+    def _offset_value(var):
+        try:
+            v = float(var.get())
+            return v if np.isfinite(v) else 0.0
+        except ValueError:
+            return 0.0
+
     def _run_colors(self, runs, sweep):
         if len(runs) == 1:
             return [SERIES[0]]
@@ -2705,29 +2751,54 @@ class App(tk.Tk):
         sweep = len(batches) == 1 and batches[0]["kind"] == "sweep"
         ax = p.clear().add_subplot()
         mode = self.out["bg_plot_main"].get() if self._bg_shown() else "original ΔR/R"
+        off = self._offset_value(self.drr_offset)
+        # runs made from different inputs (another sample or experiment) are
+        # tagged [inputs A], [inputs B], … so they are not mistaken for each other
+        # compare everything except the thicknesses that a shown sweep varies
+        # (those are in the sweep labels already)
+        skip = {b["sweep_idx"] for b in batches if b.get("kind") == "sweep"
+                and "sweep_idx" in b}
+        def fp(b):
+            inp = b["runs"][0]["inputs"]
+            return self._fingerprint(inp["layers"], skip, inp["config"],
+                                     inp["flags"])
+        keys = {id(b): fp(b) for b in batches}
+        fps = list(dict.fromkeys(keys.values()))
+        tag = {}
+        if len(fps) > 1:
+            for b in batches:
+                tag[id(b)] = f"  [inputs {chr(65 + fps.index(keys[id(b)]))}]"
         n_sub = 0
-        for r, c in zip(runs, self._run_colors(runs, sweep)):
-            res = r["res"]
-            bg = res.get("bg")
-            if mode == "original ΔR/R" or not bg:
-                ax.plot(res["t_ps"], res["drr"] * 10 ** exp, color=c, lw=1.2,
-                        label=r["label"])
-                continue
-            n_sub += 1
-            if mode == "both":
-                ax.plot(res["t_ps"], res["drr"] * 10 ** exp, color=c, lw=.9,
-                        alpha=.45, label=r["label"])
-            ax.plot(res["t_ps"], bg["sub"] * 10 ** exp, color=c, lw=1.2,
-                    label=r["label"] + " − bg" if mode == "both" else r["label"])
+        cols = self._run_colors(runs, sweep)
+        k = 0
+        for b in batches:
+            for r in b["runs"]:
+                res, c, sh = r["res"], cols[k], k * off
+                lab = r["label"] + tag.get(id(b), "")
+                k += 1
+                bg = res.get("bg")
+                if mode == "original ΔR/R" or not bg:
+                    ax.plot(res["t_ps"], res["drr"] * 10 ** exp + sh, color=c,
+                            lw=1.2, label=lab)
+                    continue
+                n_sub += 1
+                if mode == "both":
+                    ax.plot(res["t_ps"], res["drr"] * 10 ** exp + sh, color=c,
+                            lw=.9, alpha=.45, label=lab)
+                ax.plot(res["t_ps"], bg["sub"] * 10 ** exp + sh, color=c, lw=1.2,
+                        label=lab + " − bg" if mode == "both" else lab)
         tmax = max(r["res"]["t_ps"].max() for r in runs)
         ax.set_xlim(0, tmax)
         ax.axhline(0, color=GRID_C, lw=.8, zorder=0, gid="ref")
         ax.set_xlabel("delay (ps)")
-        ax.set_ylabel(drr_label(exp))
+        ax.set_ylabel(drr_label(exp) + (f"  (curves offset by {off:g})"
+                                         if off and len(runs) > 1 else ""))
         ax.set_title("Modelled differential reflectivity"
                      + (f" — sweep of {batches[0]['info']}" if sweep else "")
                      + (" — background subtracted" if n_sub and mode ==
-                        "background-subtracted" else ""))
+                        "background-subtracted" else "")
+                     + ("\nOverlaid runs come from different inputs: compare "
+                        "only runs with the same [inputs …] tag" if tag else ""))
         ax.grid(alpha=.6)
         if len(runs) > 1 or (n_sub and mode == "both"):
             ax.legend(fontsize=8, ncols=2 if len(runs) > 8 else 1).set_draggable(True)
@@ -2822,12 +2893,22 @@ class App(tk.Tk):
                 panel.redraw()
         self._update_bg_result()
 
+    def _batch_of_selected(self):
+        lab = self.view_run.get()
+        for b in self.batches:
+            if any(r["label"] == lab for r in b["runs"]):
+                return b
+        return None
+
     def draw_background(self):
         p = self.bg_panel
         res = self.selected_res()
         if res is None:
             p.empty("Run the model to see the background fit.")
             return
+        batch = self._batch_of_selected()
+        if batch is not None and batch["kind"] == "sweep" and len(batch["runs"]) > 1:
+            return self._draw_background_sweep(batch)
         bg = res.get("bg")
         if not bg:
             p.empty(self._bg_res_text(res))
@@ -2852,6 +2933,56 @@ class App(tk.Tk):
                         if bg["cut_ps"] is not None else ""))
         ax.grid(alpha=.6)
         ax.legend(fontsize=8).set_draggable(True)
+        p.finish()
+
+    def _draw_background_sweep(self, batch):
+        """All thicknesses of a finished sweep: data with the fitted
+        background (top) and ΔR/R − background (bottom), same colours."""
+        p = self.bg_panel
+        runs = batch["runs"]
+        fitted = [r for r in runs if r["res"].get("bg")]
+        if not fitted:
+            p.empty("This sweep has no background fits. Tick 'Subtract the "
+                    "background' and press 'Re-fit all runs', or run it again.")
+            return
+        exp = int(self.scale_exp.get())
+        k = 10 ** exp
+        off = self._offset_value(self.bg_offset)
+        cols = self._run_colors(runs, True)
+        fig = p.clear()
+        ax1, ax2 = fig.subplots(2, 1, sharex=True)
+        cut = None
+        for n, (r, c) in enumerate(zip(runs, cols)):
+            res, bg = r["res"], r["res"].get("bg")
+            lab = r["label"].split(": ", 1)[-1]
+            if not bg:
+                continue
+            sh = n * off
+            ax1.plot(res["t_ps"], res["drr"] * k + sh, color=c, lw=1.1, label=lab)
+            ax1.plot(res["t_ps"], bg["fit"] * k + sh, color=c, lw=1.0, ls="--")
+            ax2.plot(res["t_ps"], bg["sub"] * k + sh, color=c, lw=1.1, label=lab)
+            cut = bg["cut_ps"] if bg["cut_ps"] is not None else cut
+        t = runs[0]["res"]["t_ps"]
+        for ax in (ax1, ax2):
+            if cut is not None:
+                ax.axvline(cut, color=INK2, lw=.8, ls=":", gid="ref")
+            ax.axhline(0, color=GRID_C, lw=.8, zorder=0, gid="ref")
+            ax.set_xlim(t[0], t[-1])
+            ax.grid(alpha=.6)
+        shift = f"  (curves offset by {off:g})" if off else ""
+        ax1.set_ylabel(drr_label(exp) + shift)
+        ax2.set_ylabel(drr_label(exp) + " − bg" + shift)
+        ax2.set_xlabel("delay (ps)")
+        ax1.set_title(f"Background fits — sweep of {batch['info']}\n"
+                      f"solid: data, dashed: fitted background"
+                      + (f", dotted line: fit starts at t = {cut:g} ps"
+                         if cut is not None else ""), fontsize=9)
+        ax2.set_title("ΔR/R − background")
+        ax2.legend(fontsize=7, ncols=2 if len(runs) > 6 else 1).set_draggable(True)
+        missing = len(runs) - len(fitted)
+        if missing:
+            ax2.text(0.01, 0.02, f"{missing} run(s) without a fit (see the log)",
+                     transform=ax2.transAxes, fontsize=8, color=LIT_C)
         p.finish()
 
     def _refresh_run_list(self, select_last=True):
@@ -2910,6 +3041,26 @@ class App(tk.Tk):
         for w in warns:
             self.log("!! " + w, "warn")
         return cfg, stack, mats
+
+    def _fingerprint(self, layers=None, skip_d=None, cfg=None, flags=None,
+                     stack_only=False):
+        """Identity of the inputs: config, switches and layers (literature
+        bookkeeping left out; for a sweep, the swept layer's thickness left
+        out). Equal fingerprints = same sample and experiment."""
+        layers = self.layers if layers is None else layers
+        skip = skip_d if isinstance(skip_d, (set, frozenset)) else {skip_d}
+        lays = []
+        for i, l in enumerate(layers):
+            d = {k: v for k, v in l.items() if k != "lit"}
+            if i in skip:
+                d.pop("d", None)
+                d.pop("d_unit", None)
+            lays.append(d)
+        if stack_only:
+            return json.dumps(lays, sort_keys=True)
+        return json.dumps(dict(cfg=cfg or self._cfg_entries(),
+                               flags=flags or self._flags(), layers=lays),
+                          sort_keys=True)
 
     def _snapshot(self, layers):
         return dict(config=self._cfg_entries(), flags=self._flags(),
@@ -3005,6 +3156,18 @@ class App(tk.Tk):
                                sweep_vals=list(vals), sweep_unit=unit,
                                sweep_step=float(self.sweep_step.get())))
 
+    def _clear_result_plots(self, batch):
+        """A new run/sweep is starting: take the old results off the plots
+        so they cannot be mistaken for the new ones."""
+        what = ("the sweep" if batch.get("kind") == "sweep" else "the run")
+        msg = (f"Running {what}…\nThe plots appear here when it has "
+               f"finished (earlier runs stay under 'Show run').")
+        for panel in (self.drr_panel, self.comp_panel, self.kern_panel,
+                      self.strain_panel, self.bg_panel):
+            panel.empty(msg)
+        if hasattr(self, "bg_result"):
+            self.bg_result.config(text="Running…")
+
     def _busy(self):
         if self.worker is not None and self.worker.is_alive():
             messagebox.showinfo("Busy", "A calculation is running. Wait or "
@@ -3024,7 +3187,12 @@ class App(tk.Tk):
             job["bg_settings"] = st
         self._pending = dict(batch, runs=[], n_jobs=len(jobs), opts=opts,
                              t0=time.perf_counter(), sim_time=0.0,
-                             bg_time=0.0, bg_done=0)
+                             bg_time=0.0, bg_done=0,
+                             fingerprint=self._fingerprint(
+                                 skip_d=batch.get("sweep_idx")),
+                             stack_fp=self._fingerprint(
+                                 skip_d=batch.get("sweep_idx"), stack_only=True))
+        self._clear_result_plots(batch)
         self.worker = threading.Thread(target=self._work, args=(jobs,), daemon=True)
         self.worker.start()
 
@@ -3280,6 +3448,8 @@ class App(tk.Tk):
                                strain=self.show_strain.get(),
                                stack_mode=self.stack_mode.get(),
                                sweep_cmap=self.sweep_cmap.get(),
+                               drr_offset=self.drr_offset.get(),
+                               bg_offset=self.bg_offset.get(),
                                stack_colors=self.stack_colors,
                                scale_exp=self.scale_exp.get(),
                                overlay=self.overlay.get()),
@@ -3307,6 +3477,8 @@ class App(tk.Tk):
         self.show_strain.set(pl.get("strain", False))
         self.stack_mode.set(pl.get("stack_mode", "Equal widths"))
         self.sweep_cmap.set(pl.get("sweep_cmap", "Blues"))
+        self.drr_offset.set(pl.get("drr_offset", "0"))
+        self.bg_offset.set(pl.get("bg_offset", "0"))
         self.stack_colors = dict(pl.get("stack_colors", {}))
         self.scale_exp.set(pl.get("scale_exp", "3"))
         self.overlay.set(pl.get("overlay", False))
