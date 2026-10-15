@@ -31,6 +31,7 @@ from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg,
                                                NavigationToolbar2Tk)
 
 import diffr_model as M
+import help_info as HI
 try:
     import background as B          # needs scipy
 except ImportError as _e:           # the rest of the GUI works without it
@@ -108,6 +109,7 @@ def apply_theme(root):
                  bordercolor=OLIVE, arrowcolor=INK)
     st.configure("Sash", sashthickness=7, background=OLIVE)
     st.configure("TSeparator", background=OLIVE)
+    st.configure("Info.TLabel", foreground=INK2, font=("TkDefaultFont", 11))
     root.configure(background=CREAM)
     root.option_add("*Toplevel.background", CREAM)
     root.option_add("*TCombobox*Listbox.background", "white")
@@ -774,6 +776,100 @@ class StackColorDialog(tk.Toplevel):
         self.build()
 
 
+class HelpWindow(tk.Toplevel):
+    """Detailed help for one input (from help_info.HELP)."""
+
+    def __init__(self, app, key):
+        super().__init__(app)
+        h = HI.HELP[key]
+        self.title(f"Help — {h['title']}")
+        self.transient(app)
+        self.geometry("620x420")
+        t = tk.Text(self, wrap="word", padx=14, pady=10, relief="flat",
+                    background="white", font=("TkDefaultFont", 10))
+        sb = ttk.Scrollbar(self, orient="vertical", command=t.yview)
+        t.configure(yscrollcommand=sb.set)
+        bb = ttk.Frame(self, padding=8)
+        bb.pack(side="bottom", fill="x")
+        ttk.Button(bb, text="Code — where it is used",
+                   command=lambda: (CodeWindow(app, key))).pack(side="left")
+        ttk.Button(bb, text="Close", command=self.destroy).pack(side="right")
+        sb.pack(side="right", fill="y")
+        t.pack(fill="both", expand=True)
+        t.tag_configure("title", font=("TkDefaultFont", 13, "bold"),
+                        spacing3=6)
+        t.tag_configure("head", font=("TkDefaultFont", 10, "bold"),
+                        foreground=OLIVE_DARK, spacing1=8, spacing3=2)
+        t.insert("end", h["title"] + "\n", "title")
+        for head, field in (("What it is and why it is there", "what"),
+                            ("How to fill it in", "fill"),
+                            ("If it is left empty / switched off", "empty")):
+            if h.get(field):
+                t.insert("end", head + "\n", "head")
+                t.insert("end", h[field] + "\n")
+        t.configure(state="disabled")
+        self.bind("<Escape>", lambda e: self.destroy())
+
+
+class CodeWindow(tk.Toplevel):
+    """The lines of the program where an input is converted and used, read
+    from the source files now (so the line numbers match the files)."""
+
+    def __init__(self, app, key):
+        super().__init__(app)
+        h = HI.HELP[key]
+        self.title(f"Code — {h['title']}")
+        self.transient(app)
+        W = min(1000, app.winfo_screenwidth() - 80)
+        H = min(720, app.winfo_screenheight() - 120)
+        self.geometry(f"{W}x{H}")
+        ttk.Label(self, padding=(10, 8, 10, 4), wraplength=W - 30,
+                  justify="left", text=(
+                      f"Where '{h['title']}' is converted and used. The lines "
+                      f"are read from the program's files just now, so the "
+                      f"line numbers match your copy. Highlighted lines contain "
+                      f"the parameter; a few lines around them are shown for "
+                      f"context.")).pack(anchor="w")
+        bb = ttk.Frame(self, padding=8)
+        bb.pack(side="bottom", fill="x")
+        ttk.Button(bb, text="Help", command=lambda: HelpWindow(app, key)).pack(
+            side="left")
+        ttk.Button(bb, text="Close", command=self.destroy).pack(side="right")
+        f = ttk.Frame(self)
+        f.pack(fill="both", expand=True, padx=8)
+        t = tk.Text(f, wrap="none", font=("Courier", 10), background="white",
+                    relief="flat", padx=6, pady=4)
+        ys = ttk.Scrollbar(f, orient="vertical", command=t.yview)
+        xs = ttk.Scrollbar(f, orient="horizontal", command=t.xview)
+        t.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
+        t.grid(row=0, column=0, sticky="nsew")
+        ys.grid(row=0, column=1, sticky="ns")
+        xs.grid(row=1, column=0, sticky="ew")
+        f.rowconfigure(0, weight=1)
+        f.columnconfigure(0, weight=1)
+        t.tag_configure("file", font=("Courier", 10, "bold"),
+                        background=LAVENDER, spacing1=8, spacing3=2)
+        t.tag_configure("num", foreground=INK2)
+        t.tag_configure("hit", background="#f3f2c4")
+        t.tag_configure("match", background="#e7b8fd", font=("Courier", 10, "bold"))
+        blocks = HI.code_snippets(key)
+        if not blocks:
+            t.insert("end", "No code location is recorded for this input.")
+        for fname, where, rows in blocks:
+            t.insert("end", f" {fname} — {where}, line {rows[0][0]} \n", "file")
+            for num, text, hit, spans in rows:
+                start = t.index("end-1c")
+                t.insert("end", f"{num:5d}  ", "num")
+                col0 = len(f"{num:5d}  ")
+                t.insert("end", text + "\n", "hit" if hit else ())
+                line = int(start.split(".")[0])
+                for a, b in spans:
+                    t.tag_add("match", f"{line}.{col0 + a}", f"{line}.{col0 + b}")
+            t.insert("end", "\n")
+        t.configure(state="disabled")
+        self.bind("<Escape>", lambda e: self.destroy())
+
+
 class CutoffDialog(tk.Toplevel):
     """Asked when background subtraction is switched on: fit only after a
     delay, or the whole trace?"""
@@ -1089,11 +1185,55 @@ class App(tk.Tk):
         self.bind_all("<Control-s>", lambda e: self.save_session())
         self.bind_all("<Control-o>", lambda e: self.open_session())
 
+    # ------------------------------------------------------------ ⓘ buttons
+    def _info(self, parent, key):
+        """Small ⓘ next to an input; a click opens a floating Help / Code
+        menu (it closes when you click elsewhere or pick an option)."""
+        b = ttk.Label(parent, text="ⓘ", style="Info.TLabel", cursor="hand2")
+        b.bind("<Button-1>", lambda e, k=key: self._info_menu(e, k))
+        b.bind("<Enter>", lambda e: b.configure(foreground=VIOLET))
+        b.bind("<Leave>", lambda e: b.configure(foreground=INK2))
+        return b
+
+    def _info_menu(self, e, key):
+        title = HI.HELP[key]["title"]
+        m = tk.Menu(self, tearoff=0, background="white",
+                    activebackground=LAVENDER, activeforeground=INK)
+        m.add_command(label=f"Help — {title}",
+                      command=lambda: HelpWindow(self, key))
+        m.add_command(label="Code — where it is used",
+                      command=lambda: CodeWindow(self, key))
+        try:
+            m.tk_popup(e.x_root, e.y_root)
+        finally:
+            m.grab_release()
+
+    def _lab_info(self, parent, text, key, **kw):
+        """(frame, label): a label followed by its ⓘ."""
+        f = ttk.Frame(parent)
+        lab = ttk.Label(f, text=text, **kw)
+        lab.pack(side="left")
+        self._info(f, key).pack(side="left", padx=(3, 0))
+        return f, lab
+
+    def _chk_info(self, parent, text, var, key, **kw):
+        """A checkbutton followed by its ⓘ (clicking the text still ticks
+        the box; only the ⓘ opens the menu). Returns the frame."""
+        f = ttk.Frame(parent)
+        ttk.Checkbutton(f, text=text, variable=var, **kw).pack(side="left")
+        self._info(f, key).pack(side="left", padx=(3, 0))
+        return f
+
     # ------------------------------------------------------------ experiment
-    def _value_row(self, parent, r, label, var, unit_var, kind, hint=""):
-        """label | entry | unit menu | '= converted value' ."""
-        lab = ttk.Label(parent, text=label)
-        lab.grid(row=r, column=0, sticky="w", pady=1)
+    def _value_row(self, parent, r, label, var, unit_var, kind, hint="",
+                   key=None):
+        """label (ⓘ) | entry | unit menu | '= converted value' ."""
+        if key:
+            labf, lab = self._lab_info(parent, label, key)
+            labf.grid(row=r, column=0, sticky="w", pady=1)
+        else:
+            lab = ttk.Label(parent, text=label)
+            lab.grid(row=r, column=0, sticky="w", pady=1)
         e = ttk.Entry(parent, textvariable=var, width=12)
         e.grid(row=r, column=1, sticky="w", padx=2)
         cb = ttk.Combobox(parent, textvariable=unit_var, values=U.choices(kind),
@@ -1132,14 +1272,15 @@ class App(tk.Tk):
                 _, label, kind, val, unit, hint = info[key]
                 v, u = tk.StringVar(value=val), tk.StringVar(value=unit)
                 self.cfg_vars[key] = (v, u)
-                self._value_row(lf, r, label, v, u, kind, hint)
+                self._value_row(lf, r, label, v, u, kind, hint, key=key)
         lf = section(p, "Contributions to ΔR/R", len(groups))
         for r, (k, lab) in enumerate(S.PHYSICS_FLAGS):
-            ttk.Checkbutton(lf, text=lab, variable=self.flag_vars[k]).grid(
+            self._chk_info(lf, lab, self.flag_vars[k], k).grid(
                 row=r, column=0, sticky="w")
         ttk.Label(p, foreground=INK2, wraplength=540, justify="left",
                   text="Type each value in the unit selected next to it. The grey "
-                       "text shows what the model receives (nm, ps, SI). Hover a "
+                       "text shows what the model receives (nm, ps, SI). Click ⓘ "
+                       "for help and the code where a value is used. Hover a "
                        "label for an explanation.").grid(
             row=len(groups) + 1, column=0, sticky="w", padx=8, pady=6)
 
@@ -1220,7 +1361,8 @@ class App(tk.Tk):
 
         # --- general
         g = section(p, "Layer", 0)
-        ttk.Label(g, text="Material name").grid(row=0, column=0, sticky="w")
+        self._lab_info(g, "Material name", "material")[0].grid(
+            row=0, column=0, sticky="w")
         self.mat_cb = ttk.Combobox(g, textvariable=self.lv["material"], width=16,
                                    values=S.literature_names())
         self.mat_cb.grid(row=0, column=1, columnspan=2, sticky="w", padx=2)
@@ -1234,7 +1376,8 @@ class App(tk.Tk):
                    "equal to the pre-fill are reported as literature "
                    "placeholders when you run.")
         self.d_entry, self.d_conv = self._value_row(
-            g, 1, "Thickness", self.lv["d"], self.lv["d_unit"], "thickness")
+            g, 1, "Thickness", self.lv["d"], self.lv["d_unit"], "thickness",
+            key="d")
         self.sub_note = ttk.Label(g, foreground=INK2)
         self.sub_note.grid(row=2, column=0, columnspan=4, sticky="w")
 
@@ -1246,6 +1389,7 @@ class App(tk.Tk):
                         variable=self.lv["nk_mode"]).pack(side="left")
         ttk.Radiobutton(rf, text="Dispersion file (interpolated)", value="file",
                         variable=self.lv["nk_mode"]).pack(side="left", padx=10)
+        self._info(rf, "nk_mode").pack(side="left")
         self.nk_f = ttk.Frame(o)
         self.nk_f.grid(row=2, column=0, sticky="w", pady=(4, 0))
         self.nk_head = ttk.Label(self.nk_f, foreground=INK2)
@@ -1264,13 +1408,14 @@ class App(tk.Tk):
             self.lit_marks[f"k_{w}"].grid(row=r, column=3, sticky="w")
         self.file_f = ttk.Frame(o)
         self.file_f.grid(row=1, column=0, sticky="ew")
-        ttk.Label(self.file_f, text="File").grid(row=0, column=0, sticky="w")
+        self._lab_info(self.file_f, "File", "nk_file")[0].grid(
+            row=0, column=0, sticky="w")
         ttk.Entry(self.file_f, textvariable=self.lv["nk_file"], width=40).grid(
             row=0, column=1, columnspan=3, sticky="ew", padx=2)
         ttk.Button(self.file_f, text="Browse…", command=self.browse_nk).grid(
             row=0, column=4, padx=2)
-        lab = ttk.Label(self.file_f, text="Column-1 unit")
-        lab.grid(row=1, column=0, sticky="w")
+        labf, lab = self._lab_info(self.file_f, "Column-1 unit", "nk_file_unit")
+        labf.grid(row=1, column=0, sticky="w")
         Tooltip(lab, "Unit of the first column (wavelength or photon energy). "
                      "'auto' reads a '# unit: ...' line in the file, otherwise "
                      "guesses (values < 100 -> µm, > 1500 -> Å) and says so "
@@ -1287,8 +1432,8 @@ class App(tk.Tk):
                    "wavelengths change.")
         self.kfill_f = ttk.Frame(self.file_f)
         self.kfill_f.grid(row=2, column=0, columnspan=5, sticky="w")
-        ttk.Label(self.kfill_f, text="This file has no k column. k to use:"
-                  ).grid(row=0, column=0, columnspan=4, sticky="w")
+        self._lab_info(self.kfill_f, "This file has no k column. k to use:",
+                       "kfill")[0].grid(row=0, column=0, columnspan=4, sticky="w")
         for c, w in enumerate(("pump", "probe")):
             ff = ttk.Frame(self.kfill_f)
             ff.grid(row=1, column=c, sticky="w", padx=(0, 12))
@@ -1317,6 +1462,7 @@ class App(tk.Tk):
         rb = ttk.Radiobutton(pf, text="coefficient p", value="pe",
                              variable=self.lv["pe_mode"])
         rb.pack(side="left", padx=4)
+        self._info(pf, "pe_mode").pack(side="left")
         Tooltip(rb, "Photoelastic constant p (indicatrix convention, "
                     "d(1/n²) = p·η). Converted at the probe wavelength: "
                     "dñ/dη = −p·ñ_probe³/2.")
@@ -1337,9 +1483,10 @@ class App(tk.Tk):
         _, label, kind, _, required, default = S.PROP_INFO[key]
         cplx = key in {p[0] for p in S.COMPLEX_PROPS}
         w = []
-        lab = ttk.Label(parent, text=label + ("" if required else " (opt.)"))
-        lab.grid(row=r, column=0, sticky="w", pady=1)
-        w.append(lab)
+        labf, lab = self._lab_info(parent, label + ("" if required else " (opt.)"),
+                                   key)
+        labf.grid(row=r, column=0, sticky="w", pady=1)
+        w.append(labf)
         if cplx:
             for col, suff in ((1, "_re"), (3, "_im")):
                 en = ttk.Entry(parent, textvariable=self.lv[key + suff], width=9)
@@ -1697,7 +1844,7 @@ class App(tk.Tk):
                        "set in the Output tab.").grid(row=0, column=0, sticky="w",
                                                       padx=8, pady=(6, 2))
         g = section(tab, "Thickness range", 1)
-        ttk.Label(g, text="Layer").grid(row=0, column=0, sticky="w")
+        self._lab_info(g, "Layer", "sweep_layer")[0].grid(row=0, column=0, sticky="w")
         self.sweep_layer = tk.StringVar()
         self.sweep_cb = ttk.Combobox(g, textvariable=self.sweep_layer,
                                      state="readonly", width=38)
@@ -1713,7 +1860,8 @@ class App(tk.Tk):
             ttk.Label(g, text=lab).grid(row=1, column=1 + c, sticky="w")
             ttk.Entry(g, textvariable=var, width=10).grid(
                 row=2, column=1 + c, sticky="w", padx=(0, 6))
-        ttk.Label(g, text="Thickness").grid(row=2, column=0, sticky="w")
+        self._lab_info(g, "Thickness", "sweep_range")[0].grid(row=2, column=0,
+                                                               sticky="w")
         ttk.Combobox(g, textvariable=self.sweep_unit, state="readonly", width=6,
                      values=U.choices("thickness")).grid(row=2, column=4,
                                                          sticky="w")
@@ -1762,12 +1910,12 @@ class App(tk.Tk):
                 row=1, column=0, sticky="w", padx=8)
             return
         g = section(tab, "Subtraction", 1)
-        ttk.Checkbutton(g, text="Subtract the background from every run",
-                        variable=ov["bg_enabled"],
-                        command=self._on_bg_toggle).grid(
+        self._chk_info(g, "Subtract the background from every run",
+                       ov["bg_enabled"], "bg_enabled",
+                       command=self._on_bg_toggle).grid(
             row=0, column=0, columnspan=4, sticky="w")
-        ttk.Checkbutton(g, text="Fit only delays after a cut-off:",
-                        variable=ov["bg_use_cut"]).grid(
+        self._chk_info(g, "Fit only delays after a cut-off:", ov["bg_use_cut"],
+                       "bg_use_cut").grid(
             row=1, column=0, sticky="w", pady=(6, 0))
         ttk.Entry(g, textvariable=ov["bg_cut"], width=8).grid(
             row=1, column=1, sticky="w", padx=2, pady=(6, 0))
@@ -1779,17 +1927,18 @@ class App(tk.Tk):
         ttk.Label(g, foreground=INK2, text="(untick to fit the whole time axis, "
                   "including negative delays)").grid(row=2, column=0,
                                                      columnspan=4, sticky="w")
-        ttk.Checkbutton(g, text="Force decaying exponentials (b ≤ 0, d ≤ 0)",
-                        variable=ov["bg_force_decay"]).grid(
+        self._chk_info(g, "Force decaying exponentials (b ≤ 0, d ≤ 0)",
+                       ov["bg_force_decay"], "bg_force_decay").grid(
             row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
-        ttk.Label(g, text="Before the cut-off the subtracted column holds").grid(
+        self._lab_info(g, "Before the cut-off the subtracted column holds",
+                       "bg_before")[0].grid(
             row=4, column=0, sticky="w", pady=(6, 0))
         ttk.Combobox(g, textvariable=ov["bg_before"], width=26, state="readonly",
                      values=list(B.BEFORE_CHOICES)).grid(
             row=4, column=1, columnspan=3, sticky="w", pady=(6, 0))
 
         c = section(tab, "In the ΔR/R file and the plots", 2)
-        ttk.Label(c, text="Extra columns next to dR_over_R:").grid(
+        self._lab_info(c, "Extra columns next to dR_over_R:", "bg_cols")[0].grid(
             row=0, column=0, columnspan=3, sticky="w")
         ttk.Checkbutton(c, text="dR_over_R_minus_bg (ΔR/R − background)",
                         variable=ov["bg_col_sub"]).grid(row=1, column=0,
@@ -1803,7 +1952,8 @@ class App(tk.Tk):
             "combined sweep file gets one dR_over_R_minus_bg column per "
             "thickness.")).grid(row=3, column=0, columnspan=3, sticky="w",
                                 pady=(2, 6))
-        ttk.Label(c, text="Main ΔR/R plot shows").grid(row=4, column=0, sticky="w")
+        self._lab_info(c, "Main ΔR/R plot shows", "bg_plot_main")[0].grid(
+            row=4, column=0, sticky="w")
         cb = ttk.Combobox(c, textvariable=ov["bg_plot_main"], width=24,
                           state="readonly", values=["original ΔR/R",
                                                     "background-subtracted",
@@ -1939,7 +2089,7 @@ class App(tk.Tk):
         ov = self.out
 
         w = section(tab, "Where", 0)
-        ttk.Label(w, text="Folder").grid(row=0, column=0, sticky="w")
+        self._lab_info(w, "Folder", "out_folder")[0].grid(row=0, column=0, sticky="w")
         ttk.Entry(w, textvariable=ov["folder"], width=44).grid(
             row=0, column=1, sticky="ew", padx=2, pady=2)
         ttk.Button(w, text="Browse…", command=self._browse_out_dir).grid(
@@ -1954,7 +2104,7 @@ class App(tk.Tk):
                 ("combined", "combined_name", "One combined file per sweep "
                  "(all thicknesses side by side)", O.COMBINED_FIELDS))
         for r, (flag, name, text, fields) in enumerate(rows):
-            ttk.Checkbutton(n, text=text, variable=ov[flag]).grid(
+            self._chk_info(n, text, ov[flag], "out_auto").grid(
                 row=3 * r, column=0, columnspan=2, sticky="w", pady=(6 if r else 0, 0))
             ttk.Label(n, text="name").grid(row=3 * r + 1, column=0, sticky="e",
                                            padx=(18, 4))
@@ -1973,8 +2123,8 @@ class App(tk.Tk):
                                     pady=(6, 0))
 
         c = section(tab, "What to save", 2)
-        ttk.Checkbutton(c, text="CSV table (opens in Excel, Origin, …)",
-                        variable=ov["csv"]).grid(row=0, column=0, columnspan=4,
+        self._chk_info(c, "CSV table (opens in Excel, Origin, …)", ov["csv"],
+                       "out_csv").grid(row=0, column=0, columnspan=4,
                                                  sticky="w")
         cf = ttk.Frame(c)
         cf.grid(row=1, column=0, columnspan=4, sticky="w", padx=(18, 0))
@@ -2001,8 +2151,8 @@ class App(tk.Tk):
             side="left", padx=(2, 10))
         ttk.Checkbutton(ff, text="header row", variable=ov["csv_header"]).pack(
             side="left")
-        ttk.Checkbutton(c, text="NPZ archive (all arrays + metadata, for Python)",
-                        variable=ov["npz"]).grid(row=3, column=0, columnspan=4,
+        self._chk_info(c, "NPZ archive (all arrays + metadata, for Python)",
+                       ov["npz"], "out_npz").grid(row=3, column=0, columnspan=4,
                                                  sticky="w", pady=(6, 0))
         nf = ttk.Frame(c)
         nf.grid(row=4, column=0, columnspan=4, sticky="w", padx=(18, 0))
@@ -2010,11 +2160,11 @@ class App(tk.Tk):
                         variable=ov["npz_profiles"]).pack(side="left")
         ttk.Checkbutton(nf, text="strain map η(z,t), if recorded",
                         variable=ov["npz_strain"]).pack(side="left", padx=8)
-        ttk.Checkbutton(c, text="Metadata JSON (inputs with units, converted "
-                                "values, placeholders, run time)",
-                        variable=ov["meta_json"]).grid(
+        self._chk_info(c, "Metadata JSON (inputs with units, converted values, "
+                          "placeholders, run time)", ov["meta_json"],
+                       "out_meta").grid(
             row=5, column=0, columnspan=4, sticky="w", pady=(6, 0))
-        ttk.Checkbutton(c, text="Figures", variable=ov["figures"]).grid(
+        self._chk_info(c, "Figures", ov["figures"], "out_figures").grid(
             row=6, column=0, sticky="w", pady=(6, 0))
         gf = ttk.Frame(c)
         gf.grid(row=7, column=0, columnspan=4, sticky="w", padx=(18, 0))
@@ -2041,7 +2191,8 @@ class App(tk.Tk):
 
         k = section(tab, "Run / sweep number  ({run} in the names)", 3)
         self.next_run_var = tk.StringVar(value="1")
-        ttk.Label(k, text="Next number").grid(row=0, column=0, sticky="w")
+        self._lab_info(k, "Next number", "out_counter")[0].grid(row=0, column=0,
+                                                                 sticky="w")
         sp = ttk.Spinbox(k, from_=1, to=999999, increment=1, width=8,
                          textvariable=self.next_run_var)
         sp.grid(row=0, column=1, sticky="w", padx=4)
@@ -2052,8 +2203,8 @@ class App(tk.Tk):
             row=0, column=2, sticky="w", padx=4)
         self.counter_msg = ttk.Label(k, foreground=INK2)
         self.counter_msg.grid(row=0, column=3, sticky="w", padx=4)
-        ttk.Checkbutton(k, text="Ask before overwriting existing files",
-                        variable=ov["ask_overwrite"]).grid(
+        self._chk_info(k, "Ask before overwriting existing files",
+                       ov["ask_overwrite"], "out_overwrite").grid(
             row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
         ttk.Label(k, foreground=INK2, wraplength=500, justify="left", text=(
             "Set the number back (e.g. to 1) to write again under the same "
@@ -2437,11 +2588,12 @@ class App(tk.Tk):
         self.run_cb.pack(side="left", padx=4)
         self.run_cb.bind("<<ComboboxSelected>>", lambda e: self.redraw_run_plots())
         self.view_run.trace_add("write", lambda *_: self._update_bg_result())
-        ttk.Checkbutton(bar, text="Overlay all runs", variable=self.overlay,
-                        command=self.draw_drr).pack(side="left", padx=6)
+        self._chk_info(bar, "Overlay all runs", self.overlay, "overlay",
+                       command=self.draw_drr).pack(side="left", padx=6)
         ttk.Button(bar, text="Clear runs", command=self.clear_runs).pack(side="left")
         ttk.Label(bar2, text="Extra plots (ΔR/R and the stack are always "
                              "shown):").pack(side="left")
+        self._info(bar2, "extra_plots").pack(side="left", padx=(2, 6))
         for text, var in (("Components", self.show_components),
                           ("Kernels & absorption", self.show_kernels),
                           ("Strain map η(z,t)", self.show_strain)):

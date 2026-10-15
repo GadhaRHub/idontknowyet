@@ -17,6 +17,7 @@ python diffr_gui.py
 | `sample_input.py` | Turns what the user typed (numbers + units) into model units, builds the sample, imports conf files, saves/loads sessions. No GUI code. |
 | `background.py` | Double-exponential background subtraction: `minus_exp_fun_single3` (unchanged) plus the wrapper the GUI uses. Uses scipy's `curve_fit` when installed, otherwise a built-in numpy fitter, so nothing extra is needed. |
 | `param_import.py` | Reads parameter files (`CFG = dict(...)`, `SAMPLE = [...]`, `LITERATURE = {...}`) without executing them. |
+| `help_info.py` | The help text and code locations behind every ⓘ button. |
 | `outputs.py` | Writes results the way the Output tab says (CSV, NPZ, metadata JSON) and estimates file counts, sizes and run times. No GUI code. |
 | `units.py` | The unit menus and conversion factors. |
 | `diffr_model.py` | The physics, taken unchanged from the notebook (TMM, absorption, sensitivity kernels, leapfrog solver, save/plot). |
@@ -54,6 +55,18 @@ written to the log on every run.
 To add a unit, add one entry to `UNITS` in `units.py`.
 
 ## Using it
+
+Every field and checkbox has a small **ⓘ** next to it. Click it for a
+floating menu (click elsewhere to close it):
+- **Help**: what the input is and why it is there, how to fill it in (units,
+  limits, typical values), and what happens if it is left empty or switched
+  off.
+- **Code**: the lines of the program where the value is converted and used,
+  read from the source files when you open the window (so the line numbers
+  match your copy), with the parameter highlighted. For example, density ρ
+  shows `Z = rho*v`, `C11 = rho*v²` and where the solver uses it.
+
+Clicking the text of a checkbox still just ticks or unticks it.
 
 - **Experiment tab**: pump/probe wavelengths, fluence, pulse FWHM, thermal
   decay time, time axis, grid and CFL factor, plus checkboxes for the four
