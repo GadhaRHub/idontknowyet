@@ -387,6 +387,8 @@ class PlotPanel(ttk.Frame):
             if not st:
                 continue
             lines = self.data_lines(ax)
+            if i == 0 and self._sweep is not None:
+                lines = []          # sweep colours are set by the app
             if st.get("line_cmap"):
                 for l, c in zip(lines, cmap_colors(st["line_cmap"], len(lines))):
                     l.set_color(c)
@@ -519,6 +521,58 @@ class PlotColorDialog(tk.Toplevel):
     def style(self):
         return self.panel.styles.setdefault(self.idx(), {"lines": {}})
 
+    def _sweep_batch(self):
+        """The sweep shown in this plot (its colours belong to the app)."""
+        sw = self.panel._sweep
+        if sw is None or self.idx() != 0:
+            return None
+        return sw.get("batch")
+
+    def _build_sweep(self, p, batch):
+        app = self.panel.winfo_toplevel()
+        runs = batch["runs"]
+        cols = app._run_colors(runs, True)
+        hidden = batch.get("hidden", set())
+        ttk.Label(p, text="Thicknesses", font=("TkDefaultFont", 9, "bold")).grid(
+            row=0, column=0, sticky="w", pady=(0, 2))
+        r = 1
+        for i, run in enumerate(runs):
+            txt = f"{run['sweep_value']:g} {run.get('sweep_unit', '')}"
+            ttk.Label(p, text=txt + ("  (hidden)" if i in hidden else "")).grid(
+                row=r, column=0, sticky="w", padx=(0, 8))
+            sw = tk.Label(p, width=6, relief="solid", borderwidth=1,
+                          background=matplotlib.colors.to_hex(cols[i]),
+                          cursor="hand2")
+            sw.grid(row=r, column=1, pady=1)
+            pick = lambda e=None, rn=run, c=cols[i], t=txt: self.pick_run(rn, c, t)
+            sw.bind("<Button-1>", pick)
+            ttk.Button(p, text="Change…", command=pick).grid(row=r, column=2, padx=4)
+            r += 1
+        f = ttk.Frame(p)
+        f.grid(row=r, column=0, columnspan=3, sticky="w", pady=(8, 2))
+        ttk.Label(f, text="Colour all thicknesses from").pack(side="left")
+        self.line_cmap = tk.StringVar(value=app.sweep_cmap.get())
+        ttk.Combobox(f, textvariable=self.line_cmap, values=LINE_CMAPS,
+                     height=20, width=10).pack(side="left", padx=4)
+        ttk.Button(f, text="Apply", command=lambda: self._after_app(
+            app.set_sweep_cmap, self.line_cmap.get())).pack(side="left")
+        ttk.Label(p, foreground=INK2, wraplength=380, justify="left",
+                  text="These colours are shared by the ΔR/R, Background and "
+                       "Sweep viewer plots and their thickness colour bars.").grid(
+            row=r + 1, column=0, columnspan=3, sticky="w")
+        return r + 2
+
+    def _after_app(self, fn, *a):
+        fn(*a)
+        self.build()
+
+    def pick_run(self, run, color, txt):
+        _, hexcol = colorchooser.askcolor(color=matplotlib.colors.to_hex(color),
+                                          parent=self, title=f"Colour for {txt}")
+        if hexcol:
+            self._after_app(self.panel.winfo_toplevel().set_sweep_run_color,
+                            run, hexcol)
+
     def build(self):
         p = self.body.inner
         for w in p.winfo_children():
@@ -526,6 +580,10 @@ class PlotColorDialog(tk.Toplevel):
         ax = self.panel.data_axes()[self.idx()]
         lines = PlotPanel.data_lines(ax)
         r = 0
+        batch = self._sweep_batch()
+        if batch is not None:
+            r = self._build_sweep(p, batch)
+            lines = []
         if lines:
             ttk.Label(p, text="Curves", font=("TkDefaultFont", 9, "bold")).grid(
                 row=r, column=0, sticky="w", pady=(0, 2))
@@ -565,7 +623,7 @@ class PlotColorDialog(tk.Toplevel):
             ttk.Label(p, foreground=INK2, text="Any matplotlib colour map name "
                       "can be typed; add _r to reverse it.").grid(
                 row=r + 1, column=0, columnspan=3, sticky="w")
-        if not lines and not ax.images:
+        if not lines and not ax.images and batch is None:
             ttk.Label(p, text="This plot has no curves.").grid(row=0, column=0)
 
     def _redraw(self):
@@ -602,6 +660,12 @@ class PlotColorDialog(tk.Toplevel):
 
     def reset(self):
         self.panel.styles.pop(self.idx(), None)
+        batch = self._sweep_batch()
+        if batch is not None:
+            for run in batch["runs"]:
+                run.pop("color", None)
+            self._after_app(self.panel.winfo_toplevel()._redraw_sweep_plots)
+            return
         if hasattr(self.panel, "redraw"):
             self.panel.redraw()
         self.build()
@@ -2702,8 +2766,9 @@ class App(tk.Tk):
         cb = ttk.Combobox(self.drr_panel.row2, textvariable=self.sweep_cmap,
                           width=11, height=20, values=LINE_CMAPS)
         cb.pack(side="left", padx=2)
-        cb.bind("<<ComboboxSelected>>", lambda e: self.draw_drr())
-        cb.bind("<Return>", lambda e: self.draw_drr())
+        cb.bind("<<ComboboxSelected>>",
+                lambda e: self.set_sweep_cmap(self.sweep_cmap.get()))
+        cb.bind("<Return>", lambda e: self.set_sweep_cmap(self.sweep_cmap.get()))
         Tooltip(cb, "Colour map for the curves of a thickness sweep (thin to "
                     "thick). Any matplotlib colour map; add _r to reverse it.")
 
@@ -3039,8 +3104,33 @@ class App(tk.Tk):
             return [SERIES[0]]
         if sweep or len(runs) > len(SERIES):
             name = self.sweep_cmap.get()
-            return cmap_colors(name if name in colormaps else "Blues", len(runs))
+            cols = cmap_colors(name if name in colormaps else "Blues", len(runs))
+            if sweep:           # thicknesses given their own colour
+                cols = [r.get("color") or c for r, c in zip(runs, cols)]
+            return cols
         return SERIES[:len(runs)]
+
+    def set_sweep_cmap(self, name):
+        """Colour map of every sweep plot (ΔR/R, Background, Sweep viewer and
+        their colour bars); forgets single-thickness colour picks."""
+        name = name.strip()
+        if name not in colormaps:
+            messagebox.showerror("Sweep colours", f"Unknown colour map {name!r}.")
+            return
+        self.sweep_cmap.set(name)
+        for b in self.batches:
+            for r in b["runs"]:
+                r.pop("color", None)
+        self._redraw_sweep_plots()
+
+    def set_sweep_run_color(self, run, color):
+        """One thickness of a sweep in its own colour (None: back to the
+        colour map), in every sweep plot."""
+        if color:
+            run["color"] = color
+        else:
+            run.pop("color", None)
+        self._redraw_sweep_plots()
 
     def draw_drr(self):
         p = self.drr_panel

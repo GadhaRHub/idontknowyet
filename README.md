@@ -183,7 +183,11 @@ Clicking the text of a checkbox still just ticks or unticks it.
   any of them, the substrate included; the colours are saved with the
   session. *Sweep colours* on the ΔR/R plot picks the colour map for a
   sweep's curves from all matplotlib colour maps (Blues, ocean, bwr,
-  viridis, coolwarm, …; add `_r` to reverse one).
+  viridis, coolwarm, …; add `_r` to reverse one). The sweep colours are
+  shared by the ΔR/R, Background and Sweep viewer plots and their thickness
+  colour bars. *Colours…* on any of those plots lists the thicknesses: give
+  one thickness its own colour, or colour them all from a colour map;
+  *Reset colours of this plot* goes back to the colour map.
 - **Sweep plots — thickness colour bar instead of a legend**: a sweep's
   ΔR/R and Background plots carry a colour bar of the swept thickness (one
   colour block per thickness) and the title "Thickness sweep of layer n
