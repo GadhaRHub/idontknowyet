@@ -3067,10 +3067,7 @@ class App(tk.Tk):
         info = panel._sweep
         if info is None or panel.toolbar.mode or e.ydata is None:
             return
-        on_cbar = e.inaxes is info["cbar_ax"]
-        on_map = (panel is getattr(self, "viewer_panel", None)
-                  and e.inaxes is not None and e.inaxes is info.get("map_ax"))
-        if not (on_cbar or on_map):
+        if e.inaxes is not info["cbar_ax"]:
             return
         batch = info["batch"]
         i = int(round(e.ydata))
@@ -3090,7 +3087,7 @@ class App(tk.Tk):
         if not getattr(self, "_viewer_drag", False) or e.ydata is None:
             return
         info = panel._sweep
-        if info and e.inaxes in (info["cbar_ax"], info.get("map_ax")):
+        if info and e.inaxes is info["cbar_ax"]:
             self._viewer_pick(int(round(e.ydata)))
 
     def _redraw_sweep_plots(self):
@@ -3307,7 +3304,6 @@ class App(tk.Tk):
         vp = self.viewer_panel = PlotPanel(self.ptabs)
         vp.redraw = self.draw_viewer
         self.ptabs.add(vp, text="Sweep viewer")
-        self.viewer_view = tk.StringVar(value="Curves")
         self.viewer_mode = tk.StringVar(value=self.VIEWER_MODES[0])
         self.viewer_signal = tk.StringVar(value=self.VIEWER_SIGNALS[0])
         self.viewer_fps = tk.StringVar(value="4")
@@ -3316,9 +3312,7 @@ class App(tk.Tk):
         self._viewer_drag, self._play_job, self._viewer_job = False, None, None
         self._viewer_setting = False
         r = vp.row2
-        for lab, var, vals, w in (("View", self.viewer_view,
-                                   ["Curves", "Map (time × thickness)"], 20),
-                                  ("Show", self.viewer_mode, self.VIEWER_MODES, 21),
+        for lab, var, vals, w in (("Show", self.viewer_mode, self.VIEWER_MODES, 21),
                                   ("Signal", self.viewer_signal,
                                    self.VIEWER_SIGNALS, 17)):
             ttk.Label(r, text=lab).pack(side="left", padx=(6, 2))
@@ -3377,7 +3371,7 @@ class App(tk.Tk):
         self.viewer_pos_lbl = ttk.Label(sf, width=26, anchor="e")
         self.viewer_pos_lbl.pack(side="left", padx=6)
         ttk.Label(vp, foreground=INK2, padding=(6, 0, 6, 2), text=(
-            "Drag on the thickness colour bar (or the map, or the slider) to "
+            "Drag on the thickness colour bar (or the slider) to "
             "step through the sweep; right-click a colour to hide/show that "
             "thickness; ← → keys step one thickness.")).pack(
             side="bottom", fill="x", before=sf)
@@ -3423,34 +3417,6 @@ class App(tk.Tk):
         head = (f"{self.sweep_title(batch)}\nshowing "
                 f"{runs[cur]['sweep_value']:g} {unit}  "
                 f"({vis.index(cur) + 1} of {len(vis)})" + note)
-        if self.viewer_view.get().startswith("Map"):
-            ax = fig.add_subplot()
-            Z = np.full((n, t.size), np.nan)
-            for i in vis:
-                s_ = sig(runs[i])
-                if s_ is not None:
-                    Z[i] = s_ * k
-            fin = Z[np.isfinite(Z)]
-            lo, hi = (np.percentile(fin, [1, 99]) if fin.size else (0.0, 1.0))
-            if hi <= lo:
-                hi = lo + 1e-12
-            im = ax.imshow(Z, aspect="auto", origin="lower", cmap="viridis",
-                           extent=[t[0], t[-1], -0.5, n - 0.5], vmin=lo, vmax=hi,
-                           interpolation="nearest")
-            ax.axhline(cur, color="white", lw=2.6, gid="ref")
-            ax.axhline(cur, color=INK, lw=1.2, gid="ref")
-            step = max(1, int(np.ceil(n / 14)))
-            ticks = list(range(0, n, step))
-            ax.set_yticks(ticks, [f"{runs[i]['sweep_value']:g}" for i in ticks])
-            ax.set_ylabel(f"{batch.get('sweep_name', '')} thickness ({unit})")
-            ax.set_xlabel("delay (ps)")
-            ax.set_title(head)
-            cbi = fig.colorbar(im, ax=ax, fraction=0.05, pad=0.02)
-            cbi.ax._diffr_cbar = True
-            cbi.set_label(ylab)
-            auto = (ax.get_xlim(), ax.get_ylim())
-            self._apply_viewer_range(ax, y=False)  # y is the thickness here
-            return dict(cb=None, img_cb=cbi, map_ax=ax, ax=ax, auto=auto)
         ax = fig.add_subplot()
         mode = self.viewer_mode.get()
         off = (self._offset_value(self.viewer_offset)
@@ -3497,7 +3463,7 @@ class App(tk.Tk):
         cb = self._add_sweep_cbar(fig, ax, batch, cols, cur=cur)
         auto = (ax.get_xlim(), ax.get_ylim())
         self._apply_viewer_range(ax, y=True)
-        return dict(cb=cb, img_cb=None, map_ax=None, ax=ax, auto=auto)
+        return dict(cb=cb, ax=ax, auto=auto)
 
     def draw_viewer(self):
         self._viewer_job = None
@@ -3514,22 +3480,16 @@ class App(tk.Tk):
         if self.viewer_cur not in vis:
             self.viewer_cur = min(vis, key=lambda i: abs(i - self.viewer_cur))
         # a y range belongs to one signal and scale: forget it when they change
-        ykey = (id(batch), self.viewer_signal.get(), self.scale_exp.get(),
-                self.viewer_view.get())
+        ykey = (id(batch), self.viewer_signal.get(), self.scale_exp.get())
         if getattr(self, "_viewer_ykey", ykey) != ykey:
             self._set_viewer_range(y=None)
         self._viewer_ykey = ykey
         fig = p.clear()
         d = self._draw_viewer_frame(fig, batch, self.viewer_cur)
-        if d["cb"] is not None:
-            self._register_sweep_cbar(p, d["cb"], batch)
-        else:
-            p.colorbars.append(d["img_cb"])
-            p._sweep = dict(cbar_ax=None, batch=batch)
-        p._sweep["map_ax"] = d["map_ax"]
+        self._register_sweep_cbar(p, d["cb"], batch)
         p.finish()
         ax = d["ax"]
-        p._viewer_auto = (d["map_ax"] is not None, d["auto"])
+        p._viewer_auto = d["auto"]
         shown = (ax.get_xlim(), ax.get_ylim())
         if shown != d["auto"]:
             # toolbar Home / Back go to the full view, not to the zoom
@@ -3587,13 +3547,12 @@ class App(tk.Tk):
         info = getattr(p, "_viewer_auto", None)
         if not axes or info is None:
             return
-        is_map, auto = info
+        auto = info
         ax = axes[0]
         same = lambda a, b: np.allclose(a, b, rtol=1e-6, atol=1e-12)
         xl, yl = ax.get_xlim(), ax.get_ylim()
         self._set_viewer_range(x=None if same(xl, auto[0]) else xl,
-                               y="keep" if is_map else
-                               (None if same(yl, auto[1]) else yl))
+                               y=None if same(yl, auto[1]) else yl)
 
     def _viewer_range_typed(self):
         if self._viewer_lock:

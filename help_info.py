@@ -483,9 +483,8 @@ HELP = {
         what="Steps through the thicknesses of a finished sweep one curve at a "
              "time, like a video, with fixed axes so only the curve changes. "
              "By default it shows the background-subtracted data (ΔR/R − "
-             "background); without a background fit it shows ΔR/R. 'Map' shows "
-             "all thicknesses at once (time across, thickness up).",
-        fill="Drag on the thickness colour bar (or on the map, or the slider) "
+             "background); without a background fit it shows ΔR/R.",
+        fill="Drag on the thickness colour bar (or the slider) "
              "to choose the thickness; ← → step one. Right-click a colour to "
              "hide or show that thickness everywhere. 'Show' picks the current "
              "curve only, the current one over faint others, or all shown "

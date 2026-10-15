@@ -205,9 +205,8 @@ Clicking the text of a checkbox still just ticks or unticks it.
     subtraction ran), or plain ΔR/R.
   - *Show*: current curve only, current + the others faint, or all shown
     curves. The y range stays fixed while stepping, so amplitudes compare.
-  - *View*: curves, or a map (delay × thickness, colour = signal).
   - Pick the thickness by **dragging the mouse along the thickness colour
-    bar** (or along the map), with the slider, or with the ← → keys.
+    bar**, with the slider, or with the ← → keys.
     *Play* runs through it like a video (frames/s, loop). *Show all
     thicknesses* un-hides everything.
   - **Zoom is kept** while stepping, dragging and playing. Zoom with the
