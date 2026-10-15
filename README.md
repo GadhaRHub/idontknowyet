@@ -206,8 +206,18 @@ Clicking the text of a checkbox still just ticks or unticks it.
     bar** (or along the map), with the slider, or with the ← → keys.
     *Play* runs through it like a video (frames/s, loop). *Show all
     thicknesses* un-hides everything.
+  - **Zoom is kept** while stepping, dragging and playing. Zoom with the
+    scroll wheel or the zoom/pan tools, or type the range in *x (delay)
+    from … to … ps* and *y from … to …* (plotted units). The boxes always
+    show the current zoom; a blank box means automatic, and with only an x
+    range the y axis fits the curves inside it. *Auto range* (or the toolbar
+    Home button) goes back to the full view. The y range is forgotten when
+    the signal, the y scale or the sweep changes.
+  - *Offset*: moves the n-th shown curve up by n × offset (plotted units)
+    when other curves are shown; not used with *Current curve only*. Saved
+    with the session.
   - *Save GIF…* writes the shown thicknesses as an animated GIF, one frame
-    each, at the chosen frames/s.
+    each, at the chosen frames/s, with the current zoom and offset.
 - **Offsets**: curves are plotted without any offset unless you ask for one.
   *Offset* under the ΔR/R plot (and under the Background plot) shifts curve
   n up by n × offset, in the plotted units, so overlapping curves can be

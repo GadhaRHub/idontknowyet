@@ -3251,6 +3251,34 @@ class App(tk.Tk):
                    command=self._viewer_show_all).pack(side="left", padx=6)
         ttk.Button(r3, text="Save GIF…", command=self.save_gif).pack(
             side="left", padx=6)
+        # zoom range (kept while stepping) and offset
+        self.viewer_range = {k: tk.StringVar() for k in ("x0", "x1", "y0", "y1")}
+        self.viewer_offset = tk.StringVar(value="0")
+        self._viewer_lock = False          # True while the GUI fills the boxes
+        self._viewer_range_job = None
+        r4 = ttk.Frame(vp, padding=(4, 0, 4, 2))
+        r4.pack(side="top", fill="x", before=vp.canvas.get_tk_widget())
+        for lab, a, b, unit in (("x (delay) from", "x0", "x1", "ps"),
+                                ("y from", "y0", "y1", "")):
+            ttk.Label(r4, text=lab).pack(side="left", padx=(6, 2))
+            ttk.Entry(r4, textvariable=self.viewer_range[a], width=8).pack(
+                side="left")
+            ttk.Label(r4, text="to").pack(side="left", padx=2)
+            ttk.Entry(r4, textvariable=self.viewer_range[b], width=8).pack(
+                side="left")
+            if unit:
+                ttk.Label(r4, text=unit).pack(side="left", padx=(2, 0))
+        b = ttk.Button(r4, text="Auto range", command=self._viewer_auto_range)
+        b.pack(side="left", padx=6)
+        Tooltip(b, "Forget the zoom: show the full delay range and all curves")
+        ttk.Label(r4, text="Offset").pack(side="left", padx=(10, 2))
+        e = ttk.Entry(r4, textvariable=self.viewer_offset, width=6)
+        e.pack(side="left")
+        Tooltip(e, "Shift the shown thicknesses apart (plotted units): the n-th "
+                   "shown curve is moved up by n × offset. Used when other "
+                   "curves are shown (not in 'Current curve only'). 0 = none.")
+        for v in list(self.viewer_range.values()) + [self.viewer_offset]:
+            v.trace_add("write", lambda *_: self._viewer_range_typed())
         sf = ttk.Frame(vp, padding=(6, 2, 6, 4))
         sf.pack(side="bottom", fill="x", before=vp.canvas.get_tk_widget())
         self.viewer_scale = ttk.Scale(sf, from_=0, to=1, orient="horizontal",
@@ -3330,16 +3358,32 @@ class App(tk.Tk):
             cbi = fig.colorbar(im, ax=ax, fraction=0.05, pad=0.02)
             cbi.ax._diffr_cbar = True
             cbi.set_label(ylab)
-            return dict(cb=None, img_cb=cbi, map_ax=ax)
+            auto = (ax.get_xlim(), ax.get_ylim())
+            self._apply_viewer_range(ax, y=False)  # y is the thickness here
+            return dict(cb=None, img_cb=cbi, map_ax=ax, ax=ax, auto=auto)
         ax = fig.add_subplot()
-        curves = {i: sig(runs[i]) for i in vis}
-        allv = [c * k for c in curves.values() if c is not None]
+        mode = self.viewer_mode.get()
+        off = (self._offset_value(self.viewer_offset)
+               if mode != self.VIEWER_MODES[0] else 0.0)
+        shift = {i: j * off for j, i in enumerate(vis)}
+        curves = {i: (None if sig(runs[i]) is None else sig(runs[i]) * k + shift[i])
+                  for i in vis}
+        k = 1                                 # curves are scaled already
+        # y fits the shown curves inside the chosen delay range
+        x0, x1 = self._viewer_lims("x0", "x1")
+        win = ((t >= (t[0] if x0 is None else x0))
+               & (t <= (t[-1] if x1 is None else x1)))
+        if win.sum() < 2:
+            win = np.ones_like(t, bool)
+        allv = [c[win] for c in curves.values()
+                if c is not None and np.isfinite(c[win]).any()]
         if allv:
             lo = float(np.nanmin([np.nanmin(c) for c in allv]))
             hi = float(np.nanmax([np.nanmax(c) for c in allv]))
             pad = 0.05 * (hi - lo or abs(hi) or 1.0)
             ax.set_ylim(lo - pad, hi + pad)       # fixed: the curve moves, not the axes
-        mode = self.viewer_mode.get()
+        if off:
+            ylab += f"  (curves offset by {off:g})"
         if mode != self.VIEWER_MODES[0]:
             for i in vis:
                 if i == cur or curves[i] is None:
@@ -3361,7 +3405,9 @@ class App(tk.Tk):
         ax.set_title(head)
         ax.grid(alpha=.6)
         cb = self._add_sweep_cbar(fig, ax, batch, cols, cur=cur)
-        return dict(cb=cb, img_cb=None, map_ax=None)
+        auto = (ax.get_xlim(), ax.get_ylim())
+        self._apply_viewer_range(ax, y=True)
+        return dict(cb=cb, img_cb=None, map_ax=None, ax=ax, auto=auto)
 
     def draw_viewer(self):
         self._viewer_job = None
@@ -3377,6 +3423,12 @@ class App(tk.Tk):
         vis = self._visible(batch)
         if self.viewer_cur not in vis:
             self.viewer_cur = min(vis, key=lambda i: abs(i - self.viewer_cur))
+        # a y range belongs to one signal and scale: forget it when they change
+        ykey = (id(batch), self.viewer_signal.get(), self.scale_exp.get(),
+                self.viewer_view.get())
+        if getattr(self, "_viewer_ykey", ykey) != ykey:
+            self._set_viewer_range(y=None)
+        self._viewer_ykey = ykey
         fig = p.clear()
         d = self._draw_viewer_frame(fig, batch, self.viewer_cur)
         if d["cb"] is not None:
@@ -3386,7 +3438,87 @@ class App(tk.Tk):
             p._sweep = dict(cbar_ax=None, batch=batch)
         p._sweep["map_ax"] = d["map_ax"]
         p.finish()
+        ax = d["ax"]
+        p._viewer_auto = (d["map_ax"] is not None, d["auto"])
+        shown = (ax.get_xlim(), ax.get_ylim())
+        if shown != d["auto"]:
+            # toolbar Home / Back go to the full view, not to the zoom
+            ax.set_xlim(d["auto"][0]); ax.set_ylim(d["auto"][1])
+            p.toolbar.push_current()
+            ax.set_xlim(shown[0]); ax.set_ylim(shown[1])
+            p.toolbar.push_current()
+        ax.callbacks.connect("xlim_changed", self._viewer_zoomed)
+        ax.callbacks.connect("ylim_changed", self._viewer_zoomed)
         self._viewer_scale_update(vis, self.viewer_cur, batch)
+
+    # --- zoom range of the viewer: the boxes follow the zoom (scroll, zoom
+    # tool, pan, Home) and are applied to every frame, so stepping or
+    # playing keeps the zoom
+    def _viewer_lims(self, a, b):
+        out = []
+        for key in (a, b):
+            try:
+                v = float(self.viewer_range[key].get())
+                out.append(v if np.isfinite(v) else None)
+            except ValueError:
+                out.append(None)
+        return out
+
+    def _apply_viewer_range(self, ax, y=True):
+        for axis, (a, b) in (("x", ("x0", "x1")), ("y", ("y0", "y1"))):
+            if axis == "y" and not y:
+                continue
+            lo, hi = self._viewer_lims(a, b)
+            cur = ax.get_xlim() if axis == "x" else ax.get_ylim()
+            lo = cur[0] if lo is None else lo
+            hi = cur[1] if hi is None else hi
+            if hi > lo:
+                (ax.set_xlim if axis == "x" else ax.set_ylim)(lo, hi)
+
+    def _set_viewer_range(self, x="keep", y="keep"):
+        self._viewer_lock = True
+        try:
+            for val, keys in ((x, ("x0", "x1")), (y, ("y0", "y1"))):
+                if isinstance(val, str):
+                    continue
+                for key, v in zip(keys, val or (None, None)):
+                    self.viewer_range[key].set("" if v is None else f"{v:.5g}")
+        finally:
+            self._viewer_lock = False
+
+    def _viewer_zoomed(self, ax):
+        if not self._viewer_lock and self._viewer_range_job is None:
+            self._viewer_range_job = self.after_idle(self._viewer_sync_boxes)
+
+    def _viewer_sync_boxes(self):
+        self._viewer_range_job = None
+        p = self.viewer_panel
+        axes = p.data_axes()
+        info = getattr(p, "_viewer_auto", None)
+        if not axes or info is None:
+            return
+        is_map, auto = info
+        ax = axes[0]
+        same = lambda a, b: np.allclose(a, b, rtol=1e-6, atol=1e-12)
+        xl, yl = ax.get_xlim(), ax.get_ylim()
+        self._set_viewer_range(x=None if same(xl, auto[0]) else xl,
+                               y="keep" if is_map else
+                               (None if same(yl, auto[1]) else yl))
+
+    def _viewer_range_typed(self):
+        if self._viewer_lock:
+            return
+        if getattr(self, "_viewer_type_job", None):
+            self.after_cancel(self._viewer_type_job)
+        self._viewer_type_job = self.after(500, self._viewer_typed_redraw)
+
+    def _viewer_typed_redraw(self):
+        self._viewer_type_job = None
+        self.draw_viewer()
+
+    def _viewer_auto_range(self):
+        self._set_viewer_range(x=None, y=None)
+        self.draw_viewer()
 
     def _viewer_scale_update(self, vis, cur, batch=None):
         self._viewer_setting = True
@@ -4091,6 +4223,7 @@ class App(tk.Tk):
                                sweep_cmap=self.sweep_cmap.get(),
                                drr_offset=self.drr_offset.get(),
                                bg_offset=self.bg_offset.get(),
+                               viewer_offset=self.viewer_offset.get(),
                                stack_colors=self.stack_colors,
                                scale_exp=self.scale_exp.get(),
                                overlay=self.overlay.get()),
@@ -4120,6 +4253,7 @@ class App(tk.Tk):
         self.sweep_cmap.set(pl.get("sweep_cmap", "Blues"))
         self.drr_offset.set(pl.get("drr_offset", "0"))
         self.bg_offset.set(pl.get("bg_offset", "0"))
+        self.viewer_offset.set(pl.get("viewer_offset", "0"))
         self.stack_colors = dict(pl.get("stack_colors", {}))
         self.scale_exp.set(pl.get("scale_exp", "3"))
         self.overlay.set(pl.get("overlay", False))

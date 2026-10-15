@@ -490,9 +490,16 @@ HELP = {
              "hide or show that thickness everywhere. 'Show' picks the current "
              "curve only, the current one over faint others, or all shown "
              "curves. Play/Pause steps automatically (frames/s, loop). Save "
-             "GIF writes one frame per shown thickness.",
-        empty="Before a sweep has run, the tab only shows a hint.",
-        code=[("diffr_gui.py", r"def _draw_viewer_frame|def save_gif|def _on_sweep_press")]),
+             "GIF writes one frame per shown thickness. Zoom (scroll wheel, "
+             "zoom or pan tool) is kept while stepping and playing: the x/y "
+             "range boxes follow it and can also be typed (ps for x, plotted "
+             "units for y; a blank box is automatic, and with only an x range "
+             "y fits the curves inside it). Auto range or the toolbar Home "
+             "button go back to the full view. Offset moves the n-th shown "
+             "curve up by n × offset when other curves are shown.",
+        empty="Before a sweep has run, the tab only shows a hint. Blank range "
+              "boxes: full range. Offset 0: no offset.",
+        code=[("diffr_gui.py", r"def _draw_viewer_frame|def save_gif|def _on_sweep_press|def _apply_viewer_range|def _viewer_sync_boxes")]),
     "extra_plots": dict(
         title="Extra plots",
         what="Components: the four contributions to ΔR/R. Kernels & "
