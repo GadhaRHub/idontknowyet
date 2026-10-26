@@ -51,6 +51,17 @@ CFG = dict(
     include_lattice_T   = True,  # thermo-optic contribution from lattice heating
     include_electron_T  = True,  # thermo-optic contribution from electron heating (metals only)
     include_displacement= True,  # contribution from interfaces moving (surface + internal)
+
+    # Acoustic loss: viscous stress  sigma = C11*eta + eta_visc * d(eta)/dt
+    # per material (Material.eta_visc, Pa s); attenuation grows as f^2
+    include_loss        = True,
+
+    # Graded interfaces: list of dict(interface=j, width_nm=w, shape=
+    # "linear"|"erf"); interface j is between stack[j-1] and stack[j].
+    # Every property is mixed linearly across a region of width w centred on
+    # the nominal interface (erf: w is the 10-90 % distance).
+    graded_interfaces   = False, # switch for the GUI; the model uses `gradients`
+    gradients           = None,
 )
 
 
@@ -84,6 +95,7 @@ class Material:
     dn_dTe: complex = 0j   # electronic    d(n+ik)/dT_electron : 1/K
     Ce: float = 0.0        # electron heat capacity : J/m^3K
     tau_ep_ps: float = 1.0 # electron-phonon coupling time : ps
+    eta_visc: float = 0.0  # acoustic (longitudinal) viscosity : Pa s
 
     @property
     def Z(self):    return self.rho * self.v            # acoustic impedance : Z=rho*v
@@ -113,11 +125,13 @@ class Layer:
     dn_dTe: complex = 0j      # dn/dTe
     Ce: float = 0.0           # electronic heat capacity in the layer
     tau_ep_ps: float = 1.0    # e-phonon coupling time in the layer
+    eta_visc: float = 0.0     # acoustic viscosity in the layer (Pa s)
 
     def as_material(self, key):
         return Material(key, self.rho, self.v, self.Cp, self.alpha_lin,
                         self.B_bulk, self.n_pump, self.n_probe, self.dn_deta,
-                        self.dn_dT, self.dn_dTe, self.Ce, self.tau_ep_ps)
+                        self.dn_dT, self.dn_dTe, self.Ce, self.tau_ep_ps,
+                        self.eta_visc)
 
 
 def make_sample(layers):
@@ -698,23 +712,152 @@ def build_grid(stack, materials, cfg):
             out[(z >= edges[j]) & (z < edges[j + 1])] = j
         return out
 
-    return dict(dz=dz, N=N, z_node=z_node, z_half=z_half,
+    grid = dict(dz=dz, N=N, z_node=z_node, z_half=z_half,
                 idx_node=idx_of(z_node), idx_half=idx_of(z_half),
                 names=names, edges=edges[:-1], d_stack=sum(d_snap),
                 stack_snap=stack_snap, d_snap_nm=[t / nm for t in d_snap],
-                z_sponge=sum(d_snap) + cfg["substrate_model_nm"] * nm)
+                z_sponge=sum(d_snap) + cfg["substrate_model_nm"] * nm,
+                gradients=[])
+    grads = list(cfg.get("gradients") or [])
+    if grads:
+        errs = check_gradients(stack_snap, grads)
+        if errs:
+            raise ValueError("; ".join(errs))
+        grid["gradients"] = grads
+        for which in ("half", "node"):
+            grid["wmix_" + which] = _mix_weights(
+                grid["z_" + which], grid["idx_" + which], grid["edges"],
+                len(names), grads)
+    grid.update(_optical_slabs(grid))
+    return grid
+
+
+def _erf(x):
+    from math import erf
+    return np.vectorize(erf, otypes=[float])(x)
+
+
+# erf profile: width w is the 10-90 % distance, erf(x/s) = +-0.8 at x = +-w/2
+_ERF_10_90 = 1.8123876
+
+
+def gradient_profile(dz_from_interface, width, shape):
+    """Fraction of the LOWER material at signed distance z - z_j."""
+    x = np.asarray(dz_from_interface, float)
+    if shape == "erf":
+        return 0.5 * (1.0 + _erf(x * _ERF_10_90 / width))
+    return np.clip(x / width + 0.5, 0.0, 1.0)
+
+
+def check_gradients(stack, gradients):
+    """Problems with graded interfaces (list of messages). A gradient may
+    reach at most the whole of a neighbouring finite layer on each side."""
+    errs, seen = [], set()
+    L = len(stack)
+    for g in gradients:
+        j, w = int(g["interface"]), float(g["width_nm"])
+        tag = f"interface {j} ({stack[j - 1][0]} | {stack[j][0]})" \
+            if 1 <= j < L else f"interface {j}"
+        if not 1 <= j < L:
+            errs.append(f"{tag} does not exist (stack has {L} layers)")
+            continue
+        if j in seen:
+            errs.append(f"{tag} is graded twice")
+        seen.add(j)
+        if not w > 0:
+            errs.append(f"{tag}: width must be > 0")
+            continue
+        if g.get("shape", "linear") not in ("linear", "erf"):
+            errs.append(f"{tag}: shape must be 'linear' or 'erf'")
+        for side in (j - 1, j):
+            d = stack[side][1]
+            if d is not None and w / 2 > d + 1e-9:
+                errs.append(f"{tag}: width {w:g} nm reaches {w / 2:g} nm into "
+                            f"{stack[side][0]}, which is only {d:g} nm thick "
+                            f"(width may be at most 2 × {d:g} nm)")
+    return errs
+
+
+def _mix_weights(z, idx, edges, L, gradients):
+    """(len(z), L) weights of each layer's material at each point: one-hot
+    for sharp interfaces; across a graded interface the two neighbours mix
+    (each point only mixes with the layer across its nearest interfaces)."""
+    Wt = np.zeros((len(z), L))
+    Wt[np.arange(len(z)), idx] = 1.0
+    for g in gradients:
+        j, w = int(g["interface"]), float(g["width_nm"]) * nm
+        f = gradient_profile(z - edges[j], w, g.get("shape", "linear"))
+        above, below = idx == j - 1, idx == j
+        leak_down = np.where(above, f, 0.0)          # lower material above z_j
+        leak_up = np.where(below, 1.0 - f, 0.0)      # upper material below z_j
+        Wt[:, j - 1] += leak_up - leak_down
+        Wt[:, j] += leak_down - leak_up
+    np.clip(Wt, 0.0, 1.0, out=Wt)
+    return Wt / Wt.sum(axis=1, keepdims=True)
+
+
+def _optical_slabs(grid):
+    """Homogeneous optical slabs for the transfer matrix: the layers
+    themselves for sharp interfaces; inside a graded region one slab per grid
+    cell (dz) with mixed n. idx_slab_* maps grid points to slabs."""
+    names, dz, edges = grid["names"], grid["dz"], grid["edges"]
+    L = len(names)
+    if not grid["gradients"]:
+        slabs = [dict(w=np.eye(L)[j], z0=edges[j],
+                      d=(None if j == L - 1 else edges[j + 1] - edges[j]))
+                 for j in range(L)]
+        return dict(slabs=slabs, idx_slab_half=grid["idx_half"],
+                    idx_slab_node=grid["idx_node"])
+    Wh = grid["wmix_half"]
+    graded = Wh.max(axis=1) < 1.0 - 1e-12
+    slabs, cell_slab = [], np.zeros(grid["N"], int)
+    i, N = 0, grid["N"]
+    while i < N:
+        if graded[i]:
+            slabs.append(dict(w=Wh[i].copy(), z0=i * dz, d=dz))
+            cell_slab[i] = len(slabs) - 1
+            i += 1
+            continue
+        j0 = grid["idx_half"][i]
+        k = i
+        while k < N and not graded[k] and grid["idx_half"][k] == j0:
+            k += 1
+        slabs.append(dict(w=np.eye(L)[j0], z0=i * dz, d=(k - i) * dz))
+        cell_slab[i:k] = len(slabs) - 1
+        i = k
+    slabs[-1]["d"] = None                      # the substrate: semi-infinite
+    z_node = grid["z_node"]
+    z0s = np.array([s["z0"] for s in slabs])
+    node_slab = np.clip(np.searchsorted(z0s, z_node + 1e-6 * dz, "right") - 1,
+                        0, len(slabs) - 1)
+    return dict(slabs=slabs, idx_slab_half=cell_slab, idx_slab_node=node_slab)
 
 
 def prop_map(grid, materials, which, attr):
-    idx = grid["idx_" + which]
     vals = np.array([getattr(materials[n], attr) for n in grid["names"]])
-    return vals[idx]
+    if "wmix_" + which in grid:                # graded interfaces: mix
+        return grid["wmix_" + which] @ vals
+    return vals[grid["idx_" + which]]
 
 
 def tmm(stack, materials, lam_nm, which_n):
-    k0 = 2 * np.pi / (lam_nm * nm)
     ns = [1.0 + 0j] + [complex(getattr(materials[n], which_n)) for n, _ in stack]
     ds = [0.0] + [(0.0 if t is None else t * nm) for _, t in stack]
+    return _tmm(ns, ds, lam_nm)
+
+
+def optical_solution(grid, materials, lam_nm, which_n):
+    """Transfer-matrix solution over the grid's optical slabs (the layers,
+    or the layers plus thin graded slabs)."""
+    vals = np.array([complex(getattr(materials[n], which_n))
+                     for n in grid["names"]])
+    ns = [1.0 + 0j] + [complex(s["w"] @ vals) for s in grid["slabs"]]
+    ds = [0.0] + [(0.0 if s["d"] is None else s["d"]) for s in grid["slabs"]]
+    return _tmm(ns, ds, lam_nm)
+
+
+def _tmm(ns, ds, lam_nm):
+    k0 = 2 * np.pi / (lam_nm * nm)
     L = len(ns)
     M = np.eye(2, dtype=complex)
     Ds = []
@@ -744,9 +887,9 @@ def tmm(stack, materials, lam_nm, which_n):
 
 def optical_field(sol, grid, which):
     """Total complex field E(z) for unit incident amplitude."""
-    z, idx = grid["z_" + which], grid["idx_" + which]
+    z, idx = grid["z_" + which], grid["idx_slab_" + which]
     E = np.zeros(len(z), complex)
-    for j in range(len(grid["names"])):
+    for j in range(len(grid["slabs"])):
         m = idx == j
         if not m.any():
             continue
@@ -757,9 +900,9 @@ def optical_field(sol, grid, which):
 
 
 def poynting(sol, grid, which):
-    z, idx = grid["z_" + which], grid["idx_" + which]
+    z, idx = grid["z_" + which], grid["idx_slab_" + which]
     S = np.zeros(len(z))
-    for j in range(len(grid["names"])):
+    for j in range(len(grid["slabs"])):
         m = idx == j
         if not m.any():
             continue
@@ -772,7 +915,7 @@ def poynting(sol, grid, which):
 
 
 def absorption_profile(stack, materials, grid, cfg):
-    sol = tmm(grid["stack_snap"], materials, cfg["lambda_pump_nm"], "n_pump")
+    sol = optical_solution(grid, materials, cfg["lambda_pump_nm"], "n_pump")
     E = optical_field(sol, grid, "half")
     n = prop_map(grid, materials, "half", "n_pump")
     W = (4 * np.pi * np.real(n) * np.imag(n) / (cfg["lambda_pump_nm"] * nm)) \
@@ -781,7 +924,7 @@ def absorption_profile(stack, materials, grid, cfg):
 
 
 def sensitivity(stack, materials, grid, cfg):
-    sol = tmm(grid["stack_snap"], materials, cfg["lambda_probe_nm"], "n_probe")
+    sol = optical_solution(grid, materials, cfg["lambda_probe_nm"], "n_probe")
     E = optical_field(sol, grid, "half")
     n = prop_map(grid, materials, "half", "n_probe")
     pre = 2 * sol["k0"] * E ** 2 / sol["r"]
@@ -815,13 +958,23 @@ def interface_sensitivity(stack, materials, grid, cfg, sol=None):
     get_simul_wl_signal6 puts in through `stack_change = strain * d_stack`.
     """
     if sol is None:
-        sol = tmm(grid["stack_snap"], materials, cfg["lambda_probe_nm"], "n_probe")
+        sol = optical_solution(grid, materials, cfg["lambda_probe_nm"], "n_probe")
     E_node = optical_field(sol, grid, "node")
     names = grid["names"]
-    eps = [complex(materials[n].n_probe) ** 2 for n in names]
+    n_lay = np.array([complex(materials[n].n_probe) for n in names])
+    slabs = grid["slabs"]
+    # eps of each optical slab; for sharp interfaces the slabs are the layers.
+    # A graded interface is many small steps, each displaced with its node.
+    eps = [complex(sl["w"] @ n_lay) ** 2 for sl in slabs]
+
+    def label(sl):
+        k = np.flatnonzero(sl["w"] > 1e-9)
+        return names[k[0]] if len(k) == 1 else "graded " + "/".join(
+            names[q] for q in k)
 
     idx, f_u, where = [], [], []
-    for j, z_edge in enumerate(grid["edges"]):
+    for j, sl in enumerate(slabs):
+        z_edge = sl["z0"]
         i_node = int(round(z_edge / grid["dz"]))
         if i_node >= len(E_node):
             continue
@@ -832,8 +985,8 @@ def interface_sensitivity(stack, materials, grid, cfg, sol=None):
         idx.append(i_node)
         f_u.append(-np.real(1j * sol["k0"] * d_eps * E_node[i_node] ** 2
                             / sol["r"]))
-        where.append(("surface" if j == 0 else f"{names[j-1]}|{names[j]}",
-                      z_edge / nm))
+        where.append(("surface" if j == 0 else
+                      f"{label(slabs[j - 1])}|{label(sl)}", z_edge / nm))
     return np.array(idx, int), np.array(f_u), where
 
 
@@ -954,9 +1107,18 @@ def run_model(stack, materials, cfg=None, verbose=True, progress=None,
     rho_h = prop_map(grid, materials, "half", "rho")
     Ce_h = prop_map(grid, materials, "half", "Ce")
     vmax = max(materials[n].v for n in grid["names"])
+    visc_h = (prop_map(grid, materials, "half", "eta_visc")
+              if cfg.get("include_loss", True) else np.zeros(N))
+    lossy = bool(np.any(visc_h > 0))
 
     dt_cfl = cfg["cfl"] * dz / vmax
-    n_sub = max(1, int(np.ceil(cfg["dt_out_ps"] * ps / dt_cfl)))
+    dt_stab = dt_cfl
+    if lossy:
+        # the viscous term is a diffusion of velocity, nu = eta_visc / rho;
+        # the explicit update is stable for dt <= dz^2 / (2 nu) (with margin)
+        nu = np.max(visc_h / rho_h)
+        dt_stab = min(dt_cfl, 0.4 * dz ** 2 / nu)
+    n_sub = max(1, int(np.ceil(cfg["dt_out_ps"] * ps / dt_stab)))
     dt = cfg["dt_out_ps"] * ps / n_sub
     t_out = np.arange(cfg["t_min_ps"], cfg["t_max_ps"] + 1e-9,
                       cfg["dt_out_ps"]) * ps
@@ -1003,6 +1165,8 @@ def run_model(stack, materials, cfg=None, verbose=True, progress=None,
         for s in range(n_sub):
             gl_now = gl_f[it * n_sub + s]
             sig = C11_h * eta - src_h * gl_now
+            if lossy:                       # sigma += eta_visc * d(eta)/dt
+                sig += visc_h * (v[1:] - v[:-1]) / dz
             v[1:-1] += dt * inv_rho_dz[1:-1] * (sig[1:] - sig[:-1])
             v[0] += dt * inv_rho_dz[0] * (sig[0] - 0.0)
             v[-1] += dt * inv_rho_dz[-1] * (0.0 - sig[-1])
@@ -1034,6 +1198,7 @@ def run_model(stack, materials, cfg=None, verbose=True, progress=None,
                z_nm=grid["z_half"] / nm, f_eta=f["eta"], f_T=f["T"],
                W=W, grid=grid, cfg=cfg, sol_pump=sol_pump, sol_probe=sol_probe,
                transducer=transducer, dt_ps=dt / ps, n_sub=n_sub, stack=stack,
+               lossy=lossy, dt_limited_by_loss=lossy and dt_stab < dt_cfl,
                materials=materials, eta_zt=eta_snap)
     if eta_snap is not None:
         out["eta_t_ps"] = out["t_ps"][it_snap]
@@ -1063,7 +1228,41 @@ def run_summary(res):
         f"   (photoelastic {np.abs(res['drr_strain']).max():.2e}, "
         f"interface displacement {np.abs(res['drr_disp']).max():.2e})",
         f"  transducer (highest absorbed energy density): {res['transducer']}",
-    ])
+    ] + _loss_grad_summary(res))
+
+
+def attenuation_from_viscosity(eta_visc, rho, v, f_hz):
+    """Amplitude attenuation coefficient (1/m) of a viscous medium at
+    frequency f (low-loss limit): alpha = eta * omega^2 / (2 rho v^3)."""
+    w = 2 * np.pi * np.asarray(f_hz, float)
+    return eta_visc * w ** 2 / (2.0 * rho * v ** 3)
+
+
+def viscosity_from_attenuation(alpha, rho, v, f_hz):
+    """Inverse of attenuation_from_viscosity (alpha in 1/m at f in Hz)."""
+    w = 2 * np.pi * f_hz
+    return 2.0 * rho * v ** 3 * alpha / w ** 2
+
+
+def _loss_grad_summary(res):
+    out = []
+    mats, g = res["materials"], res["grid"]
+    if res.get("lossy"):
+        parts = []
+        for name in g["names"]:
+            m = mats[name]
+            if m.eta_visc > 0:
+                a = attenuation_from_viscosity(m.eta_visc, m.rho, m.v, 100e9)
+                parts.append(f"{name} {m.eta_visc:.3g} Pa·s "
+                             f"(α={a * 1e-6:.3g}/µm at 100 GHz)")
+        out.append("  acoustic loss: " + "; ".join(parts))
+        if res.get("dt_limited_by_loss"):
+            out.append("  (time step reduced for the viscous term's stability)")
+    for gr in g.get("gradients", []):
+        j = int(gr["interface"])
+        out.append(f"  graded interface {g['names'][j - 1]}|{g['names'][j]}: "
+                   f"{gr['width_nm']:g} nm, {gr.get('shape', 'linear')}")
+    return out
 
 
 def save_result(res, basename, save_strain_map=False, extra_meta=None):

@@ -29,10 +29,13 @@ import sample_input as S
 import units as U
 
 CFG_KEYS = {f[0] for f in S.CFG_FIELDS}
-FLAG_KEYS = {f[0] for f in S.PHYSICS_FLAGS}
+FLAG_KEYS = {f[0] for f in S.PHYSICS_FLAGS + S.OPTION_FLAGS}
 _CFG_INFO = {f[0]: f for f in S.CFG_FIELDS}
 _LAYER_KEYS = set(S.PROP_INFO) | {"nfile", "k", "k_pump", "k_probe",
-                                  "n_pump", "n_probe"}
+                                  "n_pump", "n_probe",
+                                  # acoustic loss (SI: Pa s, 1/m, Hz) and a
+                                  # graded interface to the layer below
+                                  "visc", "att", "att_f", "grad"}
 
 
 class ImportError_(Exception):
@@ -310,7 +313,7 @@ def build(found, current_cfg=None, base_dirs=(), cache=None):
                          "file", notes.get(key, "")))
         elif found["cfg"] is not None:
             rows.append(("Experiment", label, "", "", "not in file (kept)", ""))
-    for key, label in S.PHYSICS_FLAGS:
+    for key, label in S.PHYSICS_FLAGS + S.OPTION_FLAGS:
         if key in cfg_in:
             flags[key] = bool(cfg_in[key])
             rows.append(("Experiment", label, "on" if flags[key] else "off", "",
@@ -370,6 +373,34 @@ def build(found, current_cfg=None, base_dirs=(), cache=None):
                         if key in ("k", f"k_{w}"):
                             lay[f"kfill_{w}"] = lay[f"k_{w}"] = _fmt(float(val))
                     src[key] = val
+                elif key == "visc":
+                    lay["loss_mode"] = "viscosity"
+                    lay["visc"], lay["visc_unit"] = _fmt(float(val)), "Pa·s"
+                    rows.append((sec, "Acoustic loss: viscosity η", lay["visc"],
+                                 "Pa·s", "file", ""))
+                elif key in ("att", "att_f"):
+                    if key == "att":
+                        lay["loss_mode"] = "attenuation"
+                        lay["att"], lay["att_unit"] = _fmt(float(val)), "1/m"
+                    else:
+                        lay["att_f"], lay["att_f_unit"] = _fmt(float(val)), "Hz"
+                    rows.append((sec, "Acoustic loss: attenuation α" if key == "att"
+                                 else "Acoustic loss: at frequency",
+                                 _fmt(float(val)), "1/m" if key == "att" else "Hz",
+                                 "file", ""))
+                elif key == "grad":
+                    w, shape = (val, "linear") if not isinstance(val, (tuple, list)) \
+                        else (val[0], val[1] if len(val) > 1 else "linear")
+                    if shape not in S.GRAD_SHAPES:
+                        raise ValueError(f"shape must be one of {S.GRAD_SHAPES}")
+                    if last:
+                        raise ValueError("the substrate has no interface below it")
+                    lay.update(grad_on=True, grad_w=_fmt(float(w)),
+                               grad_w_unit="nm", grad_shape=shape)
+                    flags["graded_interfaces"] = True
+                    rows.append((sec, "Graded interface to the layer below",
+                                 f"{_fmt(float(w))}, {shape}", "nm", "file",
+                                 "graded interfaces switched on"))
                 elif key == "pe":
                     lay["pe_mode"] = "pe"
                     v = complex(val)

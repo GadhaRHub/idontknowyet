@@ -27,6 +27,12 @@ UNITS = {
     "e_heat_capacity": {"J/(m³·K)": 1.0, "J/(cm³·K)": 1e6},
     "per_kelvin":      {"1/K": 1.0, "1e-4/K": 1e-4, "1e-6/K": 1e-6},
     "dimensionless":   {"–": 1.0},
+    "viscosity":       {"Pa·s": 1.0, "mPa·s": 1e-3},
+    # amplitude attenuation coefficient (amplitude ~ exp(-alpha z));
+    # dB/µm: 20 log10 of the amplitude ratio per µm
+    "attenuation":     {"1/m": 1.0, "1/µm": 1e6, "1/nm": 1e9, "1/cm": 1e2,
+                        "dB/µm": 1e6 / 8.685889638},
+    "frequency":       {"Hz": 1.0, "GHz": 1e9, "THz": 1e12},
 }
 
 

@@ -70,7 +70,7 @@ Clicking the text of a checkbox still just ticks or unticks it.
 
 - **Experiment tab**: pump/probe wavelengths, fluence, pulse FWHM, thermal
   decay time, time axis, grid and CFL factor, plus checkboxes for the four
-  ΔR/R contributions.
+  ΔR/R contributions and for the acoustic loss.
 - **Layers tab**: list the layers from the top (the light side) down. The last
   layer is the semi-infinite substrate. The buttons stretch with the panel.
   Drag the divider between the layer list and the editor, or between the
@@ -88,7 +88,15 @@ Clicking the text of a checkbox still just ticks or unticks it.
   - dñ/dη, or the photoelastic constant p, converted as dñ/dη = −p·ñ³/2 at the
     probe wavelength;
   - dñ/dT;
-  - optionally Ce, τ_ep and dñ/dTₑ for metals.
+  - optionally Ce, τ_ep and dñ/dTₑ for metals;
+  - optionally an **acoustic loss**: *None*, a viscosity η (Pa·s), or an
+    amplitude attenuation α at a frequency (1/µm, 1/nm, 1/m, 1/cm or dB/µm,
+    at GHz/THz). The stress gets a viscous term, σ = C11·η + η_visc·∂η/∂t,
+    so α(f) = η_visc·ω²/(2ρv³) grows as f²: later echoes come back smaller
+    and broader. α is converted with η_visc = 2ρv³α/ω²; the grey line shows
+    η_visc and α at 50 / 100 / 200 GHz. *Include acoustic loss* in the
+    Experiment tab switches all loss on or off. A large viscosity reduces
+    the time step automatically to keep the solver stable.
 
   *Fill from literature* pre-fills from the `LITERATURE` table (Si3N4, SiO2,
   Ti, Si, Al, Au). Every field stays editable. A value that still equals its
@@ -97,6 +105,20 @@ Clicking the text of a checkbox still just ticks or unticks it.
   pre-filled. *Literature values…* (or a double-click on a layer) lists
   every value that is still a placeholder, with its unit, and can copy the
   list to the clipboard. The list also opens after *Fill from literature*.
+- **Interfaces tab** (after Layers): tick *Graded interfaces*, then tick the
+  interfaces that are graded and give each a width (nm, Å or µm) and a
+  profile: *linear* (a straight ramp) or *erf* (a smooth step; the width is
+  the 10–90 % distance). Across the width, centred on the nominal interface,
+  every property (ρ, C11, Cp, expansion, n and k at pump and probe,
+  photoelastic and thermo-optic coefficients, loss) is a linear mix of the
+  two layers. Layer thicknesses stay as given. The optics treat a graded
+  region as thin sublayers (one per grid step) in the transfer matrix. A
+  width may reach at most through a whole neighbouring layer (≤ 2 × its
+  thickness); the tab shows the limit and flags a width that is too large.
+  The settings belong to the upper layer of each interface, so they move
+  with the layers and are saved in sessions. On the stack diagram a graded
+  interface is drawn as a colour blend, with its width written below (to
+  scale in *Proportional* widths).
 - **Thickness sweep tab**: pick a layer and give a start, an end and an
   increment in any thickness unit. Layers are listed with name, number and
   thickness ("Layer 4: Si3N4 (533.8 nm)"). The sweep follows that layer
@@ -257,6 +279,11 @@ Clicking the text of a checkbox still just ticks or unticks it.
     (`path = C:\...\materials`, quotes optional). The file is found with or
     without `.txt`. If it isn't found, *Materials folder…* in the review
     window looks for it by name in another folder.
+  - Acoustic loss and graded interfaces, per layer in SI units:
+    `visc=1e-4` (Pa·s), or `att=5e5, att_f=1e11` (α in 1/m at f in Hz);
+    `grad=4` or `grad=(4, "erf")` grades the interface to the layer below
+    (width in nm) and switches graded interfaces on. `include_loss` and
+    `graded_interfaces` can also be set in `CFG`.
   - Properties the stack doesn't give are taken from the file's
     `LITERATURE` table, else from the built-in one, and are marked as
     literature placeholders.

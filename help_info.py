@@ -151,6 +151,72 @@ HELP = {
         empty="Unticked: the strain contribution is set to zero; the others "
               "are unchanged.",
         code=[("diffr_model.py", r"include_strain|drr_eta")]),
+    "include_loss": dict(
+        title="Acoustic loss",
+        what="Switches the frequency-dependent acoustic damping on or off for "
+             "the whole run. Each layer's loss is set in the Layers tab "
+             "(Acoustic loss). The stress gets a viscous term, σ = C11·η + "
+             "η_visc·∂η/∂t, so the amplitude attenuation grows as f²: "
+             "α(f) = η_visc·ω²/(2ρv³). High-frequency parts of the strain "
+             "pulse fade first, and later echoes get smaller and broader.",
+        fill="Tick to use the loss values of the layers; untick to compare "
+             "with a loss-free run without deleting them.",
+        empty="Unticked, or no layer has a loss: no damping (as before). The "
+              "absorbing sponge after the substrate is separate and always on.",
+        code=[("diffr_model.py", r"include_loss|visc_h|dt_stab"),
+              ("sample_input.py", r"include_loss")]),
+    "loss_mode": dict(
+        title="Acoustic loss of this layer",
+        what="How this material damps sound. None: no loss. Viscosity η: the "
+             "longitudinal viscosity in the viscous stress σ = C11·η + "
+             "η_visc·∂η/∂t. Attenuation α at a frequency: the amplitude "
+             "attenuation coefficient (amplitude ∝ e^(−αz)) measured or quoted "
+             "at one frequency; it is converted to a viscosity with "
+             "η_visc = 2ρv³α/ω², so α ∝ f² at other frequencies.",
+        fill="Pick one. The grey line shows η_visc and α at 50, 100 and 200 "
+             "GHz, so the two inputs can be compared. Uses this layer's ρ and v.",
+        empty="None: no damping in this layer.",
+        code=[("sample_input.py", r"def _layer_viscosity|viscosity_from_attenuation"),
+              ("diffr_model.py", r"def viscosity_from_attenuation|def attenuation_from_viscosity")]),
+    "visc": dict(
+        title="Acoustic viscosity η",
+        what="Longitudinal viscosity of the material (Pa·s), the coefficient of "
+             "the strain rate in the stress. Attenuation α = η·ω²/(2ρv³).",
+        fill="Pa·s or mPa·s, ≥ 0. Crystalline solids at 100 GHz are typically "
+             "~1e-5–1e-4 Pa·s; amorphous films and polymers more. The time "
+             "step is reduced automatically if a large value needs it.",
+        empty=_REQ + " (only when Viscosity η is chosen)",
+        code=[("sample_input.py", r"\"viscosity\""),
+              ("diffr_model.py", r"eta_visc")]),
+    "att": dict(
+        title="Attenuation α at a frequency",
+        what="Amplitude attenuation coefficient at the given frequency "
+             "(amplitude ∝ e^(−αz)). Converted to a viscosity, so it scales "
+             "as f² at other frequencies.",
+        fill="1/µm, 1/nm, 1/m, 1/cm or dB/µm (20·log10 of the amplitude ratio "
+             "per µm), and the frequency in GHz, THz or Hz.",
+        empty=_REQ + " (only when Attenuation is chosen)",
+        code=[("sample_input.py", r"\"attenuation\"|viscosity_from_attenuation"),
+              ("units.py", r"attenuation")]),
+    "graded_interfaces": dict(
+        title="Graded interfaces",
+        what="Lets chosen interfaces be graded instead of sharp: across a "
+             "region of the given width, centred on the nominal interface, "
+             "every property (ρ, C11, Cp, expansion, n and k at pump and "
+             "probe, photoelastic and thermo-optic coefficients, loss) is a "
+             "linear mix of the two layers, with the mixing fraction following "
+             "a linear ramp or an erf. The optics treat the graded region as "
+             "thin sublayers (one per grid step) in the transfer matrix, and "
+             "the acoustics use the mixed properties on the grid.",
+        fill="Tick, then tick each graded interface and give its width (nm, "
+             "Å or µm) and profile. erf: the width is the 10–90 % distance. "
+             "The width may reach at most through a whole neighbouring layer "
+             "(≤ 2 × its thickness). Use a grid step dz well below the width.",
+        empty="Unticked: all interfaces are sharp (as before); the widths are "
+              "kept for later.",
+        code=[("diffr_model.py", r"def _mix_weights|def gradient_profile|"
+               r"def check_gradients|def _optical_slabs"),
+              ("sample_input.py", r"def resolve_gradients")]),
     "include_displacement": dict(
         title="Interface / surface displacement",
         what="Includes the change of reflectivity because the surface and the "

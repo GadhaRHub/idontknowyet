@@ -60,6 +60,13 @@ CFG_FIELDS = [
      "leapfrog stability: dt = cfl · dz / v_max, must be < 1"),
 ]
 
+# switches shown outside the "Contributions" box (Experiment / Interfaces tab)
+OPTION_FLAGS = [
+    ("include_loss", "Include acoustic loss (per-material values in the "
+                     "Layers tab)"),
+    ("graded_interfaces", "Graded interfaces"),
+]
+
 PHYSICS_FLAGS = [
     ("include_strain", "Photoelastic (bulk strain wave)"),
     ("include_displacement", "Interface / surface displacement"),
@@ -91,6 +98,16 @@ COMPLEX_PROPS = [
 
 PROP_INFO = {p[0]: p for p in REAL_PROPS + COMPLEX_PROPS}
 NK_KEYS = ["n_pump", "k_pump", "n_probe", "k_probe"]
+
+# acoustic loss of a layer: none, a viscosity, or an attenuation at a
+# reference frequency (converted to a viscosity, alpha ~ f^2)
+LOSS_MODES = ["none", "viscosity", "attenuation"]
+LOSS_DEFAULTS = dict(loss_mode="none", visc="", visc_unit="Pa·s", att="",
+                     att_unit="1/µm", att_f="100", att_f_unit="GHz")
+# graded interface between a layer and the one BELOW it
+GRAD_SHAPES = ["linear", "erf"]
+GRAD_DEFAULTS = dict(grad_on=False, grad_w="5", grad_w_unit="nm",
+                     grad_shape="linear")
 KFILL_KEYS = ["kfill_pump", "kfill_probe"]
 FILE_UNITS = ["auto", "nm", "µm", "Å", "m", "eV"]
 _FILE_UNIT_TO_MODEL = {"nm": "nm", "µm": "um", "Å": "A", "m": "m", "eV": "eV"}
@@ -100,7 +117,7 @@ def new_layer(material="", d="", d_unit="nm"):
     """An empty layer dict with every field present."""
     lay = dict(material=material, d=str(d), d_unit=d_unit,
                nk_mode="typed", nk_file="", nk_file_unit="auto",
-               pe_mode="dn_deta", lit={})
+               pe_mode="dn_deta", lit={}, **LOSS_DEFAULTS, **GRAD_DEFAULTS)
     for k in NK_KEYS + KFILL_KEYS:
         lay[k] = ""
     for key, _, kind, unit, _, _ in REAL_PROPS:
@@ -319,7 +336,7 @@ def default_config_entries():
 
 
 def default_flags():
-    return {k: bool(M.CFG.get(k, True)) for k, _ in PHYSICS_FLAGS}
+    return {k: bool(M.CFG.get(k, True)) for k, _ in PHYSICS_FLAGS + OPTION_FLAGS}
 
 
 def resolve_config(entries, flags):
@@ -338,7 +355,8 @@ def resolve_config(entries, flags):
         cfg[key] = float(v)
         report.append(f"  {label:<28} {e['value']} {e['unit']:<8} -> "
                       f"{U.fmt(cfg[key])} {U.base_unit(kind)}")
-    cfg.update({k: bool(flags[k]) for k, _ in PHYSICS_FLAGS})
+    dflt = default_flags()
+    cfg.update({k: bool(flags.get(k, dflt[k])) for k, _ in PHYSICS_FLAGS + OPTION_FLAGS})
     if not errors:
         checks = [
             (cfg["lambda_pump_nm"] > 0, "Pump wavelength must be > 0"),
@@ -514,6 +532,7 @@ def resolve_layers(layers, cfg, cache=None):
             errors.append(f"{tag}: electron heat capacity must be >= 0")
         if "tau_ep_ps" in vals and vals["tau_ep_ps"] <= 0:
             errors.append(f"{tag}: τ_ep must be > 0")
+        vals["eta_visc"] = _layer_viscosity(lay, vals, tag, errors, report)
 
         for key, label, kind, _, required, default in COMPLEX_PROPS:
             if key == "pe" and lay["pe_mode"] != "pe":
@@ -552,11 +571,21 @@ def resolve_layers(layers, cfg, cache=None):
                    alpha_lin=float(v["alpha_lin"]), B_bulk=float(v["B_bulk"]),
                    n_pump=n_pu, n_probe=n_pr, dn_deta=complex(v["dn_deta"]),
                    dn_dT=complex(v["dn_dT"]), dn_dTe=complex(v["dn_dTe"]),
-                   Ce=float(v["Ce"]), tau_ep_ps=float(v["tau_ep_ps"]))
+                   Ce=float(v["Ce"]), tau_ep_ps=float(v["tau_ep_ps"]),
+                   eta_visc=float(v.get("eta_visc") or 0.0))
            for name, d, n_pu, n_pr, v, _ in built]
     stack, materials = M.make_sample(out)
     for (key, _), b in zip(stack, built):
         materials[key]._placeholder = set(b[5])
+    if not cfg.get("include_loss", True) and any(m.eta_visc > 0
+                                                 for m in materials.values()):
+        report.append("Acoustic loss is switched off (Experiment tab): the "
+                      "loss values above are not used.")
+    grads, grep_, gerr = resolve_gradients(layers, stack, cfg)
+    report += grep_
+    if gerr:
+        raise InputError(gerr)
+    cfg["gradients"] = grads
 
     # the same consistency checks build_sample makes
     sub = materials[stack[-1][0]]
@@ -593,6 +622,76 @@ def resolve_layers(layers, cfg, cache=None):
                          "therefore the strain source, is uncertain.")
         warnings.append("\n".join(lines))
     return stack, materials, report, warnings
+
+
+def _layer_viscosity(lay, vals, tag, errors, report):
+    """Viscosity (Pa s) of a layer from its loss inputs; 0 for no loss."""
+    mode = lay.get("loss_mode", "none")
+    if mode == "viscosity":
+        x = _float(lay["visc"], f"{tag}: viscosity", errors)
+        if x is None:
+            return 0.0
+        eta = U.to_base(x, "viscosity", lay["visc_unit"])
+        if eta < 0:
+            errors.append(f"{tag}: viscosity must be >= 0")
+            return 0.0
+        line = f"    loss        η = {lay['visc']} {lay['visc_unit']} -> {U.fmt(eta)} Pa·s"
+    elif mode == "attenuation":
+        a = _float(lay["att"], f"{tag}: attenuation", errors)
+        f = _float(lay["att_f"], f"{tag}: attenuation frequency", errors)
+        if a is None or f is None:
+            return 0.0
+        alpha = U.to_base(a, "attenuation", lay["att_unit"])
+        f_hz = U.to_base(f, "frequency", lay["att_f_unit"])
+        if alpha < 0 or f_hz <= 0:
+            errors.append(f"{tag}: attenuation must be >= 0 and its frequency > 0")
+            return 0.0
+        if "rho" not in vals or "v" not in vals:
+            return 0.0                     # reported as missing rho / v already
+        eta = M.viscosity_from_attenuation(alpha, vals["rho"], vals["v"], f_hz)
+        line = (f"    loss        α = {lay['att']} {lay['att_unit']} at "
+                f"{lay['att_f']} {lay['att_f_unit']} -> η = 2ρv³α/ω² = "
+                f"{U.fmt(eta)} Pa·s")
+    else:
+        return 0.0
+    if "rho" in vals and "v" in vals and eta > 0:
+        a = [M.attenuation_from_viscosity(eta, vals["rho"], vals["v"], fq) * 1e-6
+             for fq in (50e9, 100e9, 200e9)]
+        line += (f"   (α ∝ f²: {a[0]:.3g} / {a[1]:.3g} / {a[2]:.3g} per µm at "
+                 f"50 / 100 / 200 GHz)")
+    report.append(line)
+    return float(eta)
+
+
+def resolve_gradients(layers, stack, cfg):
+    """Graded interfaces from the layer dicts -> (list for the model, report
+    lines, errors). Empty when the switch is off. grad_* of layer i is the
+    interface between layer i and layer i + 1."""
+    if not cfg.get("graded_interfaces"):
+        return [], [], []
+    grads, report, errors = [], [], []
+    for i, lay in enumerate(layers[:-1]):
+        if not lay.get("grad_on"):
+            continue
+        tag = (f"Interface {i + 1}|{i + 2} ({lay['material'].strip() or '?'} | "
+               f"{layers[i + 1]['material'].strip() or '?'})")
+        x = _float(lay.get("grad_w", ""), f"{tag}: width", errors)
+        if x is None:
+            continue
+        w = U.to_base(x, "thickness", lay.get("grad_w_unit", "nm"))
+        shape = lay.get("grad_shape", "linear")
+        grads.append(dict(interface=i + 1, width_nm=float(w), shape=shape))
+        report.append(f"  {tag}: graded, {lay['grad_w']} {lay['grad_w_unit']} "
+                      f"-> {U.fmt(w)} nm, {shape}"
+                      + (" (10–90 %)" if shape == "erf" else ""))
+    if grads:
+        report.insert(0, "Graded interfaces (properties mixed linearly across "
+                         "each width, centred on the interface)")
+        errors += [e[0].upper() + e[1:] for e in M.check_gradients(stack, grads)]
+    else:
+        report.append("Graded interfaces switched on, but no interface is "
+                      "ticked in the Interfaces tab.")
+    return grads, report, errors
 
 
 def sample_table(stack, materials, cfg):

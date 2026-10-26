@@ -1250,6 +1250,7 @@ class App(tk.Tk):
         self.tabs.pack(fill="both", expand=True)
         self._build_experiment_tab()
         self._build_layers_tab()
+        self._build_interfaces_tab()
         self._build_sweep_tab()
         self.out = {}                   # Output + Background settings
         for k, v in O.default_options().items():
@@ -1414,12 +1415,15 @@ class App(tk.Tk):
         for r, (k, lab) in enumerate(S.PHYSICS_FLAGS):
             self._chk_info(lf, lab, self.flag_vars[k], k).grid(
                 row=r, column=0, sticky="w")
+        lf = section(p, "Acoustic loss", len(groups) + 1)
+        self._chk_info(lf, S.OPTION_FLAGS[0][1], self.flag_vars["include_loss"],
+                       "include_loss").grid(row=0, column=0, sticky="w")
         ttk.Label(p, foreground=INK2, wraplength=540, justify="left",
                   text="Type each value in the unit selected next to it. The grey "
                        "text shows what the model receives (nm, ps, SI). Click ⓘ "
                        "for help and the code where a value is used. Hover a "
                        "label for an explanation.").grid(
-            row=len(groups) + 1, column=0, sticky="w", padx=8, pady=6)
+            row=len(groups) + 2, column=0, sticky="w", padx=8, pady=6)
 
     # ---------------------------------------------------------------- layers
     def _build_layers_tab(self):
@@ -1484,6 +1488,108 @@ class App(tk.Tk):
         split.add(self.editor, weight=3)
         self._build_layer_editor(self.editor.inner)
 
+    # ------------------------------------------------------------ interfaces
+    def _build_interfaces_tab(self):
+        sf = ScrollableFrame(self.tabs)
+        self.tabs.add(sf, text="Interfaces")
+        self.iface_tab = sf
+        p = sf.inner
+        top = ttk.Frame(p)
+        top.grid(row=0, column=0, sticky="ew", padx=6, pady=(6, 2))
+        self._chk_info(top, "Graded interfaces (layers merge gradually "
+                            "instead of meeting at a sharp boundary)",
+                       self.flag_vars["graded_interfaces"],
+                       "graded_interfaces").pack(anchor="w")
+        hint = ttk.Label(p, foreground=INK2, justify="left", text=(
+            "Tick the interfaces that are graded and give the width of the "
+            "graded region. Every property (ρ, C11, Cp, expansion, n, k, "
+            "photoelastic and thermo-optic coefficients, loss) changes from "
+            "one layer to the next across that width, centred on the nominal "
+            "interface, so the layer thicknesses are unchanged. Linear: a "
+            "straight ramp. erf: a smooth step (like interdiffusion or "
+            "roughness); the width is the 10–90 % distance. A width may reach "
+            "at most through a whole neighbouring layer (≤ 2 × its "
+            "thickness)."))
+        hint.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 4))
+        hint.bind("<Configure>", lambda e: hint.config(
+            wraplength=max(200, e.width - 8)))
+        self.iface_frame = section(p, "Interfaces (top to bottom)", 2)
+        self.flag_vars["graded_interfaces"].trace_add(
+            "write", lambda *_: (self._refresh_interfaces(), self.schedule_stack()))
+        self._iface_vars = []
+
+    def _refresh_interfaces(self):
+        """One row per interface between consecutive layers; the values are
+        kept in the upper layer's dict (grad_on, grad_w, grad_w_unit,
+        grad_shape), so they move with the layers."""
+        if not hasattr(self, "iface_frame"):
+            return
+        f = self.iface_frame
+        for w in f.winfo_children():
+            w.destroy()
+        self._iface_vars = []
+        on = self.flag_vars["graded_interfaces"].get()
+        st = "normal" if on else "disabled"
+        if len(self.layers) < 2:
+            ttk.Label(f, text="Add at least two layers.").grid(row=0, column=0)
+            return
+        for c, h in enumerate(("Interface", "Graded", "Width", "", "Profile",
+                               "Limit / note")):
+            ttk.Label(f, text=h, font=("TkDefaultFont", 9, "bold")).grid(
+                row=0, column=c, sticky="w", padx=3)
+        ds = [S.parse_thickness(l) for l in self.layers[:-1]] + [None]
+        for i, lay in enumerate(self.layers[:-1]):
+            for k, v in S.GRAD_DEFAULTS.items():
+                lay.setdefault(k, v)
+            below = self.layers[i + 1]
+            name = lambda l: l["material"].strip() or "?"
+            r = i + 1
+            ttk.Label(f, text=f"{i + 1}|{i + 2}  {name(lay)} | {name(below)}"
+                      + ("  (substrate)" if i + 1 == len(self.layers) - 1
+                         else "")).grid(row=r, column=0, sticky="w", padx=3)
+            v_on = tk.BooleanVar(value=bool(lay["grad_on"]))
+            v_w = tk.StringVar(value=lay["grad_w"])
+            v_u = tk.StringVar(value=lay["grad_w_unit"])
+            v_s = tk.StringVar(value=lay["grad_shape"])
+            ttk.Checkbutton(f, variable=v_on, state=st).grid(row=r, column=1)
+            ttk.Entry(f, textvariable=v_w, width=7, state=st).grid(
+                row=r, column=2, padx=2)
+            ttk.Combobox(f, textvariable=v_u, values=["nm", "Å", "µm"],
+                         state="readonly" if on else "disabled", width=4).grid(
+                row=r, column=3)
+            ttk.Combobox(f, textvariable=v_s, values=S.GRAD_SHAPES,
+                         state="readonly" if on else "disabled", width=7).grid(
+                row=r, column=4, padx=2)
+            note = ttk.Label(f, foreground=INK2)
+            note.grid(row=r, column=5, sticky="w", padx=3)
+            lim = [d for d in (ds[i], ds[i + 1]) if d]
+            limit = 2 * min(lim) if lim else None
+
+            def upd(*_, lay=lay, v_on=v_on, v_w=v_w, v_u=v_u, v_s=v_s,
+                    note=note, limit=limit):
+                lay.update(grad_on=v_on.get(), grad_w=v_w.get(),
+                           grad_w_unit=v_u.get(), grad_shape=v_s.get())
+                txt, col = (f"≤ {limit:g} nm" if limit else ""), INK2
+                try:
+                    w = U.to_base(float(v_w.get()), "thickness", v_u.get())
+                    if w <= 0:
+                        txt, col = "width must be > 0", "#c00000"
+                    elif limit and w > limit + 1e-9:
+                        txt, col = (f"too wide: at most {limit:g} nm here",
+                                    "#c00000")
+                    elif v_u.get() != "nm":
+                        txt = f"= {U.fmt(w)} nm; " + txt
+                except ValueError:
+                    txt, col = "not a number", "#c00000"
+                note.config(text=txt if on and v_on.get() else
+                            (f"≤ {limit:g} nm" if limit else ""), foreground=col
+                            if on and v_on.get() else INK2)
+                self.schedule_stack()
+            for v in (v_on, v_w, v_u, v_s):
+                v.trace_add("write", upd)
+            self._iface_vars.append((v_on, v_w, v_u, v_s))
+            upd()
+
     def _layer_var(self, key):
         v = tk.StringVar()
         v.trace_add("write", lambda *_: self._on_layer_var(key))
@@ -1493,7 +1599,7 @@ class App(tk.Tk):
     def _build_layer_editor(self, p):
         self.lv, self.conv_upd, self.lit_marks = {}, {}, {}
         for key in S.new_layer():
-            if key != "lit":
+            if key != "lit" and not key.startswith("grad_"):
                 self._layer_var(key)
 
         # --- general
@@ -1614,6 +1720,41 @@ class App(tk.Tk):
         self._prop_row(e, 1, "tau_ep_ps")
         self._prop_row(e, 2, "dn_dTe")
 
+        # --- acoustic loss
+        a = section(p, "Acoustic loss — optional (frequency-dependent "
+                       "damping, α ∝ f²)", 5)
+        lf = ttk.Frame(a)
+        lf.grid(row=0, column=0, columnspan=6, sticky="w")
+        for val, txt in (("none", "None"), ("viscosity", "Viscosity η"),
+                         ("attenuation", "Attenuation α at a frequency")):
+            ttk.Radiobutton(lf, text=txt, value=val,
+                            variable=self.lv["loss_mode"]).pack(side="left",
+                                                                padx=(0, 8))
+        self._info(lf, "loss_mode").pack(side="left")
+        self.loss_rows = {}
+        r1 = ttk.Frame(a)
+        self._lab_info(r1, "η", "visc")[0].pack(side="left")
+        ttk.Entry(r1, textvariable=self.lv["visc"], width=10).pack(side="left",
+                                                                   padx=2)
+        ttk.Combobox(r1, textvariable=self.lv["visc_unit"], state="readonly",
+                     values=U.choices("viscosity"), width=7).pack(side="left")
+        self.loss_rows["viscosity"] = r1
+        r2 = ttk.Frame(a)
+        self._lab_info(r2, "α", "att")[0].pack(side="left")
+        ttk.Entry(r2, textvariable=self.lv["att"], width=9).pack(side="left",
+                                                                 padx=2)
+        ttk.Combobox(r2, textvariable=self.lv["att_unit"], state="readonly",
+                     values=U.choices("attenuation"), width=7).pack(side="left")
+        ttk.Label(r2, text="at").pack(side="left", padx=4)
+        ttk.Entry(r2, textvariable=self.lv["att_f"], width=7).pack(side="left")
+        ttk.Combobox(r2, textvariable=self.lv["att_f_unit"], state="readonly",
+                     values=U.choices("frequency"), width=5).pack(side="left",
+                                                                  padx=2)
+        self.loss_rows["attenuation"] = r2
+        self.loss_conv = ttk.Label(a, foreground=INK2, wraplength=520,
+                                   justify="left")
+        self.loss_conv.grid(row=2, column=0, columnspan=6, sticky="w")
+
     def _prop_row(self, parent, r, key):
         """One material property: label, value (Re/Im), unit, conversion,
         literature marker. Returns the widgets (to show/hide)."""
@@ -1683,6 +1824,8 @@ class App(tk.Tk):
             self._show_nk_mode()
         if key == "pe_mode":
             self._show_pe_mode()
+        if key in self.LOSS_KEYS:
+            self._update_loss_view()
         base = key[:-5] if key.endswith("_unit") else key
         base = base[:-3] if base.endswith(("_re", "_im")) else base
         if base in self.conv_upd:
@@ -1692,9 +1835,49 @@ class App(tk.Tk):
         if key in ("material", "d", "d_unit"):
             self.schedule_stack()
             self._refresh_sweep_layers()      # names/thickness in the sweep list
+            self._refresh_interfaces()
         if key in ("nk_mode", "nk_file", "nk_file_unit", "kfill_pump",
                    "kfill_probe"):
             self.schedule_file_nk()
+
+    LOSS_KEYS = ("loss_mode", "visc", "visc_unit", "att", "att_unit", "att_f",
+                 "att_f_unit", "rho", "rho_unit", "v", "v_unit")
+
+    def _update_loss_view(self):
+        """Show the row of the chosen loss input and what it means: η and
+        the amplitude attenuation at 50 / 100 / 200 GHz."""
+        mode = self.lv["loss_mode"].get()
+        for m, row in self.loss_rows.items():
+            if m == mode:
+                row.grid(row=1, column=0, columnspan=6, sticky="w", pady=2)
+            else:
+                row.grid_remove()
+        if self.sel is None or mode == "none":
+            self.loss_conv.config(text="No acoustic loss: echoes keep their "
+                                       "amplitude (apart from transmission).",
+                                  foreground=INK2)
+            return
+        lay = self.layers[self.sel]
+        try:
+            rho = U.to_base(float(lay["rho"]), "density", lay["rho_unit"])
+            v = U.to_base(float(lay["v"]), "velocity", lay["v_unit"])
+            if mode == "viscosity":
+                eta = U.to_base(float(lay["visc"]), "viscosity", lay["visc_unit"])
+                head = f"= {U.fmt(eta)} Pa·s"
+            else:
+                alpha = U.to_base(float(lay["att"]), "attenuation", lay["att_unit"])
+                f_hz = U.to_base(float(lay["att_f"]), "frequency", lay["att_f_unit"])
+                eta = M.viscosity_from_attenuation(alpha, rho, v, f_hz)
+                head = f"→ η = 2ρv³α/ω² = {U.fmt(eta)} Pa·s"
+            al = [M.attenuation_from_viscosity(eta, rho, v, f) * 1e-6
+                  for f in (50e9, 100e9, 200e9)]
+            self.loss_conv.config(
+                text=f"{head};  amplitude attenuation α = {al[0]:.3g} / "
+                     f"{al[1]:.3g} / {al[2]:.3g} per µm at 50 / 100 / 200 GHz",
+                foreground=INK2)
+        except (ValueError, ZeroDivisionError, KeyError):
+            self.loss_conv.config(text="Enter numbers (and ρ, v above) to see "
+                                       "the attenuation.", foreground="#c00000")
 
     def _show_nk_mode(self):
         file_mode = self.lv["nk_mode"].get() == "file"
@@ -1836,6 +2019,7 @@ class App(tk.Tk):
             self.sel = None
         self.schedule_stack()
         self._refresh_sweep_layers()
+        self._refresh_interfaces()
 
     def show_placeholders(self, layer=None):
         rows = S.placeholder_rows(self.layers)
@@ -1872,6 +2056,7 @@ class App(tk.Tk):
             self.d_conv.config(text="")
         self._show_nk_mode()
         self._show_pe_mode()
+        self._update_loss_view()
         for f in self.conv_upd.values():
             f()
         self._refresh_lit_marks()
@@ -2904,6 +3089,7 @@ class App(tk.Tk):
                         va="bottom", fontsize=8, fontweight="bold", color=INK)
             self._stack_x.append((x, x + w))
             x += w
+        n_grad = self._draw_stack_gradients(ax, mode, order)
         ax.annotate("", xy=(0, 0.5), xytext=(-air, 0.5),
                     arrowprops=dict(arrowstyle="-|>", color=INK2, lw=1.5))
         ax.text(-air / 2, 0.62, "pump\nprobe", ha="center", va="bottom",
@@ -2911,7 +3097,7 @@ class App(tk.Tk):
         ax.text(-air / 2, 0.38, "air", ha="center", va="top", fontsize=8,
                 color=INK2)
         ax.set_xlim(-air, total)
-        ax.set_ylim(-0.1, 1.25 if mark else 1.1)
+        ax.set_ylim(-0.2 if n_grad else -0.1, 1.25 if mark else 1.1)
         ax.set_yticks([])
         for s in ("left", "right", "top"):
             ax.spines[s].set_visible(False)
@@ -2924,11 +3110,61 @@ class App(tk.Tk):
         title = (f"Sample stack ({len(self.layers)} layers, "
                  f"{sum(d for d in ds if d):g} nm above the substrate; "
                  f"widths: {mode.lower()})")
+        if n_grad:
+            title += f"; {n_grad} graded interface{'s' if n_grad > 1 else ''}"
         if mark:
             title += (f"\nThickness sweep{' (planned)' if mark['planned'] else ''}"
                       f": {mark['title']} — {mark['range_long']}")
         ax.set_title(title)
         p.finish()
+
+    def _draw_stack_gradients(self, ax, mode, order):
+        """Graded interfaces on the stack diagram: the two colours blend
+        across the graded region (to scale in 'Proportional', otherwise a
+        fixed share of the neighbouring blocks), with the width written
+        below. Returns how many were drawn."""
+        if not self.flag_vars["graded_interfaces"].get():
+            return 0
+        n = 0
+        last = len(self.layers) - 1
+        for i, lay in enumerate(self.layers[:-1]):
+            if not lay.get("grad_on"):
+                continue
+            try:
+                w_nm = U.to_base(float(lay["grad_w"]), "thickness",
+                                 lay["grad_w_unit"])
+            except (ValueError, KeyError):
+                continue
+            if w_nm <= 0 or i + 1 >= len(self._stack_x):
+                continue
+            (a0, a1), (b0, b1) = self._stack_x[i], self._stack_x[i + 1]
+            if mode == "Proportional":
+                h_up = h_dn = w_nm / 2
+            else:                          # not to scale: a visible band
+                h_up, h_dn = 0.3 * (a1 - a0), 0.3 * (b1 - b0)
+            h_up, h_dn = min(h_up, a1 - a0), min(h_dn, b1 - b0)
+            c_up = matplotlib.colors.to_rgb(self.material_color(
+                lay["material"].strip(), order))
+            c_dn = matplotlib.colors.to_rgb(self.material_color(
+                self.layers[i + 1]["material"].strip(), order,
+                substrate=i + 1 == last))
+            xs = np.linspace(-h_up, h_dn, 96)
+            if mode == "Proportional":     # to scale: x is in nm
+                frac = M.gradient_profile(xs, w_nm, lay["grad_shape"])
+            else:                          # the band is the graded width
+                u = np.where(xs < 0, xs / max(h_up, 1e-12), xs / max(h_dn, 1e-12))
+                frac = M.gradient_profile(u, 2.0, lay["grad_shape"])
+            img = (1 - frac)[None, :, None] * np.array(c_up) + \
+                frac[None, :, None] * np.array(c_dn)
+            ax.imshow(img, extent=(a1 - h_up, a1 + h_dn, 0, 1), aspect="auto",
+                      alpha=.85, zorder=2, interpolation="bilinear")
+            ax.plot([a1 - h_up, a1 + h_dn], [-0.05, -0.05], color=INK2, lw=1,
+                    marker="|", ms=6)
+            ax.text(a1, -0.08, f"{lay['grad_w']} {lay['grad_w_unit']} "
+                    f"{lay['grad_shape']}", ha="center", va="top", fontsize=7,
+                    color=INK2)
+            n += 1
+        return n
 
     def material_color(self, name, order=None, substrate=False):
         """Colour of a layer in the stack diagram: the user's choice, else
@@ -4309,7 +4545,7 @@ class App(tk.Tk):
                 v.set(e["value"])
                 u.set(e["unit"])
         for k, v in self.flag_vars.items():
-            v.set(bool(st["flags"].get(k, True)))
+            v.set(bool(st["flags"].get(k, S.default_flags()[k])))
         pl = st.get("plots", {})
         self.show_components.set(pl.get("components", False))
         self.show_kernels.set(pl.get("kernels", False))
