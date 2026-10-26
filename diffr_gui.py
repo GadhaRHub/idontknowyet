@@ -50,73 +50,88 @@ SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
           "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 INK, INK2, GRID_C, LIT_C = "#0b0b0b", "#52514e", "#d9d8d4", "#b35900"
 
-# "Lavender fields" palette for the window theme
-# (background lightened from #FDFBD4 to #FEFEDC)
-CREAM, OLIVE, LAVENDER, VIOLET = "#FEFEDC", "#BDB96A", "#C1BFFF", "#CF6DFC"
-OLIVE_DARK = "#8a8640"          # olive, darkened for frame lines / hover
+# "Berry & indigo" palette for the window theme
+BG = "#FAF6F9"                  # panels (very light pink-white)
+BERRY = "#7A1F5C"               # buttons, unselected tabs, scrollbars
+INDIGO = "#2E2A6B"              # selected tab, frames, dividers
+SIENNA = "#A0522D"              # Run model / Run sweep / Play
+TEAL = "#6CC5BA"                # ticks, progress bar, selections (dark text)
+LIGHT = "#EBD9E5"               # light berry tint for menus / headers
+DISABLED_BG, DISABLED_FG = "#e7e1e5", "#9a949a"
+
+
+def _mix(c, w, f):
+    """Blend colour c towards w by fraction f (for hover / pressed shades)."""
+    a, b = matplotlib.colors.to_rgb(c), matplotlib.colors.to_rgb(w)
+    return matplotlib.colors.to_hex([x + (y - x) * f for x, y in zip(a, b)])
 
 
 def apply_theme(root):
-    """Window theme from the palette: cream panels, lavender buttons and
-    tabs, olive for the selected tab and frames, violet for the Run buttons.
-    Plot drawing areas stay white."""
+    """Window theme from the palette: berry buttons and tabs with white text,
+    indigo for the selected tab and frames, sienna for the Run buttons, light
+    teal for ticks, progress and selections. Plot drawing areas stay white."""
     st = ttk.Style(root)
     try:
         st.theme_use("clam")       # the native themes ignore most colours
     except tk.TclError:
         return
-    st.configure(".", background=CREAM, foreground=INK, bordercolor=OLIVE,
-                 lightcolor=CREAM, darkcolor=OLIVE, troughcolor=CREAM,
-                 focuscolor=VIOLET, selectbackground=VIOLET,
+    hover, pressed = _mix(BERRY, "white", .25), _mix(BERRY, "black", .25)
+    st.configure(".", background=BG, foreground=INK, bordercolor=INDIGO,
+                 lightcolor=BG, darkcolor=INDIGO, troughcolor=BG,
+                 focuscolor=TEAL, selectbackground=TEAL,
                  selectforeground=INK)
     for w in ("TFrame", "TLabel", "TCheckbutton", "TRadiobutton", "TNotebook",
               "TPanedwindow"):
-        st.configure(w, background=CREAM)
-    st.map("TCheckbutton", background=[("active", CREAM)],
-           indicatorbackground=[("selected", VIOLET), ("!selected", "white")])
-    st.map("TRadiobutton", background=[("active", CREAM)],
-           indicatorbackground=[("selected", VIOLET), ("!selected", "white")])
-    st.configure("TLabelframe", background=CREAM, bordercolor=OLIVE,
-                 lightcolor=OLIVE, darkcolor=OLIVE)
-    st.configure("TLabelframe.Label", background=CREAM, foreground=INK)
-    st.configure("TButton", background=LAVENDER, bordercolor=OLIVE_DARK,
-                 lightcolor=LAVENDER, darkcolor=LAVENDER, padding=(8, 3))
-    st.map("TButton", background=[("disabled", "#e6e5d8"), ("pressed", VIOLET),
-                                  ("active", "#d3d1ff")],
-           foreground=[("disabled", "#9a998f")])
-    st.configure("Accent.TButton", background=VIOLET, lightcolor=VIOLET,
-                 darkcolor=VIOLET, font=("TkDefaultFont", 9, "bold"))
-    st.map("Accent.TButton", background=[("disabled", "#e6e5d8"),
-                                         ("pressed", "#b84fe8"),
-                                         ("active", "#dc8ffd")],
-           foreground=[("disabled", "#9a998f")])
-    st.configure("TNotebook", bordercolor=OLIVE, tabmargins=(2, 4, 2, 0))
-    st.configure("TNotebook.Tab", background=LAVENDER, bordercolor=OLIVE,
-                 lightcolor=LAVENDER, padding=(8, 3))
-    st.map("TNotebook.Tab", background=[("selected", OLIVE), ("active", "#d3d1ff")],
-           lightcolor=[("selected", OLIVE)])
+        st.configure(w, background=BG)
+    for w in ("TCheckbutton", "TRadiobutton"):
+        st.map(w, background=[("active", BG)],
+               indicatorbackground=[("selected", TEAL), ("!selected", "white")])
+    st.configure("TLabelframe", background=BG, bordercolor=INDIGO,
+                 lightcolor=INDIGO, darkcolor=INDIGO)
+    st.configure("TLabelframe.Label", background=BG, foreground=INK)
+    st.configure("TButton", background=BERRY, foreground="white",
+                 bordercolor=pressed, lightcolor=BERRY, darkcolor=BERRY,
+                 padding=(8, 3))
+    st.map("TButton", background=[("disabled", DISABLED_BG),
+                                  ("pressed", pressed), ("active", hover)],
+           foreground=[("disabled", DISABLED_FG)])
+    st.configure("Accent.TButton", background=SIENNA, foreground="white",
+                 lightcolor=SIENNA, darkcolor=SIENNA,
+                 font=("TkDefaultFont", 9, "bold"))
+    st.map("Accent.TButton", background=[("disabled", DISABLED_BG),
+                                         ("pressed", _mix(SIENNA, "black", .25)),
+                                         ("active", _mix(SIENNA, "white", .2))],
+           foreground=[("disabled", DISABLED_FG), ("!disabled", "white")])
+    st.configure("TNotebook", bordercolor=INDIGO, tabmargins=(2, 4, 2, 0))
+    st.configure("TNotebook.Tab", background=BERRY, foreground="white",
+                 bordercolor=INDIGO, lightcolor=BERRY, padding=(8, 3))
+    st.map("TNotebook.Tab", background=[("selected", INDIGO), ("active", hover)],
+           lightcolor=[("selected", INDIGO)])
     for w in ("TEntry", "TCombobox", "TSpinbox"):
-        st.configure(w, fieldbackground="white", background=LAVENDER,
-                     bordercolor=OLIVE_DARK, arrowcolor=INK)
+        st.configure(w, fieldbackground="white", background=BERRY,
+                     bordercolor=INDIGO, arrowcolor="white")
     st.map("TCombobox", fieldbackground=[("readonly", "white")],
-           background=[("active", "#d3d1ff")])
+           background=[("active", hover)])
+    st.map("TSpinbox", background=[("active", hover)])
     st.configure("Treeview", background="white", fieldbackground="white",
-                 bordercolor=OLIVE)
-    st.map("Treeview", background=[("selected", VIOLET)],
+                 bordercolor=INDIGO)
+    st.map("Treeview", background=[("selected", TEAL)],
            foreground=[("selected", INK)])
-    st.configure("Treeview.Heading", background=LAVENDER, bordercolor=OLIVE_DARK)
-    st.map("Treeview.Heading", background=[("active", "#d3d1ff")])
-    st.configure("TProgressbar", background=VIOLET, troughcolor="white",
-                 bordercolor=OLIVE, lightcolor=VIOLET, darkcolor=VIOLET)
-    st.configure("TScrollbar", background=LAVENDER, troughcolor=CREAM,
-                 bordercolor=OLIVE, arrowcolor=INK)
-    st.configure("Sash", sashthickness=7, background=OLIVE)
-    st.configure("TSeparator", background=OLIVE)
+    st.configure("Treeview.Heading", background=BERRY, foreground="white",
+                 bordercolor=pressed)
+    st.map("Treeview.Heading", background=[("active", hover)])
+    st.configure("TProgressbar", background=TEAL, troughcolor="white",
+                 bordercolor=INDIGO, lightcolor=TEAL, darkcolor=TEAL)
+    st.configure("TScrollbar", background=BERRY, troughcolor=BG,
+                 bordercolor=INDIGO, arrowcolor="white")
+    st.map("TScrollbar", background=[("active", hover)])
+    st.configure("Sash", sashthickness=7, background=INDIGO)
+    st.configure("TSeparator", background=INDIGO)
     st.configure("Info.TLabel", foreground=INK2, font=("TkDefaultFont", 11))
-    root.configure(background=CREAM)
-    root.option_add("*Toplevel.background", CREAM)
+    root.configure(background=BG)
+    root.option_add("*Toplevel.background", BG)
     root.option_add("*TCombobox*Listbox.background", "white")
-    root.option_add("*TCombobox*Listbox.selectBackground", VIOLET)
+    root.option_add("*TCombobox*Listbox.selectBackground", TEAL)
     root.option_add("*TCombobox*Listbox.selectForeground", INK)
 
 
@@ -184,7 +199,7 @@ class ScrollableFrame(ttk.Frame):
     def __init__(self, master, **kw):
         super().__init__(master, **kw)
         self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0,
-                                background=CREAM)
+                                background=BG)
         sb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.inner = ttk.Frame(self.canvas)
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(
@@ -262,7 +277,7 @@ class PlotPanel(ttk.Frame):
         self.toolbar.update()
         for w in [self.toolbar] + self.toolbar.winfo_children():   # tk widgets
             try:
-                w.configure(background=CREAM)
+                w.configure(background=BG)
             except tk.TclError:
                 pass
         self.toolbar.pack(side="left", fill="x", expand=True)
@@ -921,7 +936,7 @@ class HelpWindow(tk.Toplevel):
         t.tag_configure("title", font=("TkDefaultFont", 13, "bold"),
                         spacing3=6)
         t.tag_configure("head", font=("TkDefaultFont", 10, "bold"),
-                        foreground=OLIVE_DARK, spacing1=8, spacing3=2)
+                        foreground=INDIGO, spacing1=8, spacing3=2)
         t.insert("end", h["title"] + "\n", "title")
         for head, field in (("What it is and why it is there", "what"),
                             ("How to fill it in", "fill"),
@@ -970,9 +985,9 @@ class CodeWindow(tk.Toplevel):
         f.rowconfigure(0, weight=1)
         f.columnconfigure(0, weight=1)
         t.tag_configure("file", font=("Courier", 10, "bold"),
-                        background=LAVENDER, spacing1=8, spacing3=2)
+                        background=LIGHT, spacing1=8, spacing3=2)
         t.tag_configure("num", foreground=INK2)
-        t.tag_configure("hit", background="#f3f2c4")
+        t.tag_configure("hit", background="#d9f1ee")
         t.tag_configure("match", background="#e7b8fd", font=("Courier", 10, "bold"))
         blocks = HI.code_snippets(key)
         if not blocks:
@@ -1216,7 +1231,7 @@ class App(tk.Tk):
         outer = tk.PanedWindow(self, orient="horizontal", sashwidth=8,
                                sashrelief="raised", showhandle=False,
                                borderwidth=0, opaqueresize=True,
-                               background=OLIVE)
+                               background=INDIGO)
         outer.pack(fill="both", expand=True)
         leftc = ttk.Frame(outer)
         right = ttk.Frame(outer)
@@ -1313,14 +1328,14 @@ class App(tk.Tk):
         menu (it closes when you click elsewhere or pick an option)."""
         b = ttk.Label(parent, text="ⓘ", style="Info.TLabel", cursor="hand2")
         b.bind("<Button-1>", lambda e, k=key: self._info_menu(e, k))
-        b.bind("<Enter>", lambda e: b.configure(foreground=VIOLET))
+        b.bind("<Enter>", lambda e: b.configure(foreground=BERRY))
         b.bind("<Leave>", lambda e: b.configure(foreground=INK2))
         return b
 
     def _info_menu(self, e, key):
         title = HI.HELP[key]["title"]
         m = tk.Menu(self, tearoff=0, background="white",
-                    activebackground=LAVENDER, activeforeground=INK)
+                    activebackground=LIGHT, activeforeground=INK)
         m.add_command(label=f"Help — {title}",
                       command=lambda: HelpWindow(self, key))
         m.add_command(label="Code — where it is used",
@@ -3655,17 +3670,18 @@ class App(tk.Tk):
                 return self._stop_play()
             pos = -1
         self.viewer_cur = vis[pos + 1]
-        t0 = time.perf_counter()
         self.draw_viewer()
+        # start the frame timer only once the canvas has really been drawn
+        # (draw_idle runs first among the idle tasks), so frames never pile
+        # up and the window always stays responsive
+        self._play_job = self.after_idle(self._play_schedule)
+
+    def _play_schedule(self):
         try:
             fps = min(max(float(self.viewer_fps.get()), 0.2), 30.0)
         except ValueError:
             fps = 4.0
-        spent = (time.perf_counter() - t0) * 1000
-        # never faster than the drawing allows, and always leave the window
-        # time to react to clicks
-        self._play_job = self.after(max(int(1000 / fps - spent), 30),
-                                    self._play_step)
+        self._play_job = self.after(max(int(1000 / fps), 30), self._play_step)
 
     def save_gif(self):
         """The shown thicknesses as an animated GIF (one frame each)."""

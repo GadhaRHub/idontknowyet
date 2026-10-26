@@ -273,7 +273,9 @@ Clicking the text of a checkbox still just ticks or unticks it.
 
 Runs execute in the background with a progress bar and a Cancel button.
 
-The window uses the "Lavender fields" palette: light cream #FEFEDC panels,
-lavender #C1BFFF buttons and tabs, olive #BDB96A for the selected tab, frames
-and dividers, and violet #CF6DFC for the Run model / Run sweep buttons. Plot
-areas stay white.
+The window uses the "Berry & indigo" palette: a light pink-white #FAF6F9
+background, berry #7A1F5C buttons and tabs with white text, indigo #2E2A6B
+for the selected tab, frames and dividers, sienna #A0522D for the Run model /
+Run sweep / Play buttons, and light teal #6CC5BA for ticks, the progress bar
+and selections. The colours are set at the top of `diffr_gui.py` (BG, BERRY,
+INDIGO, SIENNA, TEAL). Plot areas stay white.
