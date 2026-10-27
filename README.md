@@ -92,10 +92,23 @@ The window and taskbar use the PiSES icon (`assets/`: SVG, PNGs from 16 to
   a calculation runs). Choosing *Run thickness sweep* switches to sweep
   mode: from then on the stack diagram shows the sweep on **every** page,
   until you choose *Run model* again. The mode is saved with the session.
-- **Top bar**: *Open* (open a session, or start a new one from the example
-  stack), *Save* (save / save as), *Import* (parameter file, fs-sonar
+- **Top bar**: *Open* (open a session, start a new one from the example
+  stack, **New window**, *Open session in a new window…*), *Save* (save /
+  save as / *Name this session…*), *Import* (parameter file, fs-sonar
   conf_file), *Export* (the selected run, or a sweep). Keys: **F5** run,
-  **F6** sweep, **Ctrl+S** save, **Ctrl+O** open.
+  **F6** sweep, **Ctrl+S** save, **Ctrl+O** open, **Ctrl+N** new window.
+- **Session name** (top bar, next to the page name): click it (✎) or use
+  *Save → Name this session…* to name the session without saving it. It is
+  shown in the top bar and the window title, so parallel windows are easy
+  to tell apart, and it is kept in the session file. It is empty ("unnamed
+  session") until you type one; importing a parameter file or conf_file
+  names the session after that file, unless you have typed a name (clear
+  the name to let the next import name it again).
+- **Several sessions at once**: *New window* (Ctrl+N) starts another PiSES
+  as its own program, with its own session. Calculations in different
+  windows run in parallel on different CPU cores, and one window crashing
+  does not affect the others. `python pises_qt.py my_session.json` opens a
+  session directly.
 - **Inspector**: the inputs of the page chosen in the rail. Every block can
   be folded by clicking its title. Drag the divider to its right to make it
   wider or narrower; it widens by itself when a page needs more room (up to
@@ -287,7 +300,7 @@ Steps through a sweep one thickness at a time.
 
 | File | What you do with it |
 |---|---|
-| sessions (`*.json`, *Save*) | the whole state: inputs, layers, page settings, plot styles, run counter |
+| sessions (`*.json`, *Save*) | the whole state: session name, inputs, layers, page settings, plot styles, run counter, run mode |
 | parameter files (*Import*) | `CFG = dict(...)`, `SAMPLE = [...]`, `LITERATURE = {...}` written the notebook way (see `examples/Parameter_info_example.txt`); nothing in the file is executed |
 | conf files (*Import*) | fs-sonar `conf_file_*.txt`: thicknesses, n,k files and peCoef; other constants from `properties.txt` / `*.prop` or literature |
 | results (*Export*, automatic saving) | CSV, NPZ, metadata JSON, figures, as set on the Output page |

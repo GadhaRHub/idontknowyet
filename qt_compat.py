@@ -251,3 +251,13 @@ class colorchooser:
         if not c.isValid():
             return None, None
         return (c.red(), c.green(), c.blue()), c.name()
+
+
+class simpledialog:
+    @staticmethod
+    def askstring(title, prompt, initialvalue="", parent=None, **_):
+        """One line of text, or None when cancelled."""
+        text, ok = QtWidgets.QInputDialog.getText(
+            _parent(parent), title, prompt, QtWidgets.QLineEdit.EchoMode.Normal,
+            initialvalue or "")
+        return text if ok else None

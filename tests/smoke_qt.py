@@ -256,6 +256,19 @@ pump()
 st1 = json.dumps(app._state(), sort_keys=True, default=str)
 check("session save → new → open restores everything", st0 == st1)
 
+# ---------------------------------------------------------------- names
+app.new_session()
+pump()
+ok = app.session_name == ""
+app._name_from_file(os.path.join(tmp, "Parameter_info_x.txt"))   # an import
+ok = ok and app.session_name == "Parameter_info_x"
+L.simpledialog.askstring = staticmethod(lambda *a, **k: "typed name")
+app.rename_session()
+app._name_from_file(os.path.join(tmp, "other.txt"))              # keeps typed
+ok = ok and app.session_name == "typed name" and "typed name" in app.windowTitle()
+check("session name: empty, then from an import, a typed name is kept", ok,
+      repr(app.session_name))
+
 # ---------------------------------------------------------------- summary
 errors = [b for b in boxes if b[0] == "showerror"]
 check("no error message boxes", not errors, str(errors))

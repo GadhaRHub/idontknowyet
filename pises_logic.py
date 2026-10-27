@@ -36,6 +36,7 @@ Window hooks (implemented in pises_qt.App):
 import copy
 import json
 import os
+import sys
 import queue
 import threading
 import time
@@ -63,7 +64,7 @@ import sample_input as S
 import units as U
 import qt_theme as T
 import qt_widgets as W
-from qt_compat import messagebox, filedialog
+from qt_compat import messagebox, filedialog, simpledialog
 from gui_common import (APP_NAME, APP_LONG, EXAMPLE_STACK,
                         DEFAULT_MATERIAL_COLORS, SUBSTRATE_KEY,
                         SUBSTRATE_DEFAULT, FIGURE_PANELS, HELP_TEXT, drr_label,
@@ -2315,6 +2316,8 @@ class Logic:
                     output=self._opts(),
                     next_run=self.run_counter + 1,
                     run_mode=self.run_mode,
+                    session_name=self.session_name,
+                    session_name_auto=self._name_auto,
                     plot_styles={name: {str(k): v for k, v in pan.styles.items()}
                                  for name, pan in self.figure_panels().items()})
 
@@ -2372,7 +2375,36 @@ class Logic:
             self._refresh_sweep_layers()
         self.run_mode = st.get("run_mode", "single")
         self._run_mode_changed()
+        self.set_session_name(st.get("session_name", ""),
+                              auto=st.get("session_name_auto", True))
         self._update_plot_tabs()
+
+    # --- session name: shown in the top bar and the window title, set
+    # without saving; empty until typed, or taken from an imported file
+    session_name = ""
+    _name_auto = True            # True: not typed by the user (may be replaced)
+
+    def set_session_name(self, name, auto=False):
+        self.session_name = (name or "").strip()
+        self._name_auto = auto or not self.session_name
+        self._refresh_title()
+
+    def _refresh_title(self):
+        name = self.session_name
+        self.title(f"{name} — {APP_NAME}" if name else APP_LONG)
+
+    def rename_session(self):
+        name = simpledialog.askstring(
+            "Name this session", "Session name (shown in the top bar and the "
+            "window title; leave empty for none):", self.session_name)
+        if name is not None:
+            self.set_session_name(name)
+
+    def _name_from_file(self, path):
+        """An imported file names the session, unless the user named it."""
+        if self._name_auto:
+            self.set_session_name(os.path.splitext(os.path.basename(path))[0],
+                                  auto=True)
 
     def save_session(self):
         if not self.session_path:
@@ -2383,11 +2415,12 @@ class Logic:
             messagebox.showerror("Save session", f"{type(e).__name__}: {e}")
             return
         self.log(f"session saved: {self.session_path}")
-        self.title(f"{APP_NAME} — {os.path.basename(self.session_path)}")
+        self._refresh_title()
 
     def save_session_as(self):
         p = filedialog.asksaveasfilename(
             title="Save session", defaultextension=".json",
+            initialfile=self.session_name,
             filetypes=[("PiSES session", "*.json")])
         if p:
             self.session_path = p
@@ -2406,7 +2439,6 @@ class Logic:
             return
         self._apply_state(st)
         self.session_path = p
-        self.title(f"{APP_NAME} — {os.path.basename(p)}")
         self.log(f"session loaded: {p}")
 
     def new_session(self):
@@ -2417,8 +2449,30 @@ class Logic:
                   layers=[])
         self._apply_state(st)
         self.session_path = None
-        self.title(APP_LONG)
+        self.set_session_name("", auto=True)
         self.load_example()
+
+    def new_window(self, session=None):
+        """Start another PiSES as its own program (own process): its runs
+        go in parallel with this window's, on another CPU core."""
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        cmd = [sys.executable, os.path.join(here, "pises_qt.py")]
+        if session:
+            cmd.append(session)
+        try:
+            subprocess.Popen(cmd, cwd=here)
+        except OSError as e:
+            messagebox.showerror("New window", f"{type(e).__name__}: {e}")
+            return
+        self.log("opened a new PiSES window" + (f" with {session}" if session else ""))
+
+    def open_session_new_window(self):
+        p = filedialog.askopenfilename(
+            title="Open session in a new window",
+            filetypes=[("PiSES session", "*.json"), ("All", "*")])
+        if p:
+            self.new_window(p)
 
     def load_example(self):
         self.layers = []
@@ -2448,6 +2502,7 @@ class Logic:
         return W.ImportReviewDialog(self, p, read, self.cache)
 
     def apply_import(self, r, path):
+        self._name_from_file(path)
         for key, e in r["config"].items():
             v, u = self.cfg_vars[key]
             u.set(e["unit"])
@@ -2508,6 +2563,7 @@ class Logic:
         self.layers = layers
         self.sel = None
         self.refresh_tree(0)
+        self._name_from_file(p)
         self.log(f"imported {os.path.basename(p)} (materials folder: {used})",
                  "head")
         for m in msgs:

@@ -14,6 +14,7 @@ inherits. The physics is in diffr_model.py; unit conversion and input
 checking in sample_input.py and units.py; files in outputs.py.
 """
 
+import html
 import os
 import queue
 import sys
@@ -163,6 +164,7 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         self.out["bg_enabled"].trace_add("write", lambda *_: self._update_plot_tabs())
         for key, seq in ((self.run_single, "F5"), (self.run_sweep, "F6"),
                          (self.save_session, "Ctrl+S"),
+                         (self.new_window, "Ctrl+N"),
                          (self.open_session, "Ctrl+O")):
             QtGui.QShortcut(QtGui.QKeySequence(seq), self,
                             activated=lambda f=key: f())
@@ -171,6 +173,7 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         self.draw_drr()
         self.draw_viewer()
         self.load_example()
+        self._refresh_title()
         self._poll_timer = QtCore.QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
         self._poll_timer.start(100)
@@ -268,6 +271,9 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         sub = W.label(APP_SUB, "brandsub")
         h.addSpacing(4)
         self.crumb = W.label("", "crumb")
+        self.crumb.setTextFormat(Qt.TextFormat.RichText)
+        self.crumb.linkActivated.connect(lambda *_: self.rename_session())
+        self.crumb.setToolTip("Click the session name to change it")
         for w in (sub, self.crumb):     # may be cut short; never set a width
             w.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
                             QtWidgets.QSizePolicy.Policy.Preferred)
@@ -277,10 +283,17 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         h.addWidget(self.crumb, 3)
         h.addWidget(self._tool("📂 Open", [
             ("Open session…  (Ctrl+O)", self.open_session),
-            ("New session (example stack)", self.new_session)]))
+            ("New session (example stack)", self.new_session),
+            None,
+            ("New window  (Ctrl+N)", self.new_window),
+            ("Open session in a new window…", self.open_session_new_window)],
+            "A new window is a separate PiSES: its calculations run in "
+            "parallel with this one's"))
         h.addWidget(self._tool("💾 Save", [
             ("Save session  (Ctrl+S)", self.save_session),
-            ("Save session as…", self.save_session_as)]))
+            ("Save session as…", self.save_session_as),
+            None,
+            ("Name this session…", self.rename_session)]))
         h.addWidget(self._tool("⇪ Import", [
             ("Parameter file (CFG / SAMPLE)…", self.import_params),
             ("fs-sonar conf_file…", self.import_conf)]))
@@ -685,9 +698,12 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
     def _update_crumb(self):
         if not hasattr(self, "crumb") or self.rail.current < 0:
             return
-        sess = (os.path.splitext(os.path.basename(self.session_path))[0]
-                if self.session_path else "untitled session")
-        self.crumb.setText(f"{sess}  ›  <b style='color:{T.BERRY}'>"
+        name = self.session_name
+        shown = (f"<span style='color:{T.INK}'>{html.escape(name)}</span>" if name
+                 else f"<i style='color:{T.INK2}'>unnamed session</i>")
+        self.crumb.setText(f"<a href='rename' style='text-decoration:none'>{shown}"
+                           f" <span style='color:{T.INK2}'>✎</span></a>  ›  "
+                           f"<b style='color:{T.BERRY}'>"
                            f"{PAGES[self.rail.current][1]}</b>")
 
     # --- Experiment ----------------------------------------------------
@@ -1451,6 +1467,9 @@ def main(argv=None):
         messagebox.showerror("PiSES — files out of step", msg)
         raise
     win.show()
+    args = (argv if argv is not None else sys.argv)[1:]
+    if args and os.path.isfile(args[0]):     # pises_qt.py session.json
+        win.open_session(args[0])
     return app.exec()
 
 
