@@ -3,10 +3,10 @@ Type=Application
 Name=PiSES
 GenericName=PicoSonar EchoStacks
 Comment=Picosecond acoustics and ΔR/R of thin-film stacks
-# Replace /path/to/idontknowyet with the folder that holds diffr_gui.py
-Exec=python3 /path/to/idontknowyet/diffr_gui.py
+# Replace /path/to/idontknowyet with the folder that holds pises_qt.py
+Exec=python3 /path/to/idontknowyet/pises_qt.py
 Path=/path/to/idontknowyet
 Icon=pises
 Terminal=false
 Categories=Science;Physics;Education;
-StartupWMClass=Pises
+StartupWMClass=PiSES

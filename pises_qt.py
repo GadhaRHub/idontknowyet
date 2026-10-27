@@ -45,7 +45,7 @@ PAGES = [("experiment", "Experiment"), ("layers", "Layers"),
 PAGE_EXPERIMENT, PAGE_LAYERS, PAGE_INTERFACES, PAGE_SWEEP, PAGE_BACKGROUND, \
     PAGE_OUTPUT = range(6)
 
-LABEL_W = 180          # width of the label column in the inspector
+LABEL_W = 184          # width of the label column in the inspector
 
 
 class App(Logic, Scheduler, QtWidgets.QMainWindow):
@@ -645,7 +645,9 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         W.set_bad(label, bad)
 
     def _lab_info(self, text, key, width=LABEL_W):
-        w = W.hbox(QtWidgets.QLabel(text), W.InfoButton(self, key), spacing=2)
+        lab = QtWidgets.QLabel(text)
+        lab.setWordWrap(True)          # a long name takes two lines, not cut
+        w = W.hbox(lab, W.InfoButton(self, key), spacing=2)
         if width:
             w.setFixedWidth(width)
         return w
@@ -658,6 +660,7 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
 
     def _on_page(self, i):
         self.pages.setCurrentIndex(i)
+        QtCore.QTimer.singleShot(0, self._fit_inspector)
         self._update_crumb()
         self.schedule_stack()            # the swept layer is marked while planning
 
@@ -924,7 +927,8 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
                       W.line_edit(self.lv[key + "_im"], 64)]
         else:
             parts.append(W.line_edit(self.lv[key], 90))
-        parts.append(W.combo(self.lv[key + "_unit"], U.choices(kind), width=104))
+        parts.append(W.combo(self.lv[key + "_unit"], U.choices(kind),
+                              width=112 if cplx else 150))
         mark = W.label("", "lit")
         self.lit_marks[key] = mark
         parts.append(mark)
@@ -1044,7 +1048,7 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         while g.count():
             w = g.takeAt(0).widget()
             if w is not None:
-                w.deleteLater()
+                w.hide(); w.deleteLater()
         self._iface_vars = []
         on = self.flag_vars["graded_interfaces"].get()
         if len(self.layers) < 2:
@@ -1123,7 +1127,7 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
                                         ("Increment", self.sweep_step)), 1):
             gl.addWidget(W.label(lab, "note"), 0, c)
             gl.addWidget(W.line_edit(var, 80), 1, c)
-        gl.addWidget(self._lab_info("Thickness", "sweep_range", 90), 1, 0)
+        gl.addWidget(self._lab_info("Thickness", "sweep_range", 110), 1, 0)
         gl.addWidget(W.combo(self.sweep_unit, U.choices("thickness"), width=70), 1, 4)
         gl.setColumnStretch(5, 1)
         sec.add_full(grid)
@@ -1266,8 +1270,8 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         sec = W.Section("What to save")
         sec.add_full(self._check_info("CSV table (opens in Excel, Origin, …)",
                                       ov["csv"], "out_csv"))
-        sec.add_full(W.hbox(W.label("columns: time, ΔR/R, plus", "note"),
-                            *[W.check(lab, ov[opt]) for opt, lab in (
+        sec.add_full(W.label("columns: time, ΔR/R, plus", "note"))
+        sec.add_full(W.hbox(*[W.check(lab, ov[opt]) for opt, lab in (
                                 ("comp_strain", "strain"),
                                 ("comp_disp", "displacement"),
                                 ("comp_lattice", "lattice T"),
@@ -1278,7 +1282,8 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
                             QtWidgets.QLabel("separator"),
                             W.combo(ov["csv_delimiter"], list(O.DELIMITERS),
                                     width=100),
-                            QtWidgets.QLabel("format"),
+                            margins=(18, 0, 0, 0)))
+        sec.add_full(W.hbox(QtWidgets.QLabel("format"),
                             W.line_edit(ov["csv_format"], 70),
                             W.check("header row", ov["csv_header"]),
                             margins=(18, 0, 0, 0)))
@@ -1287,8 +1292,8 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         sec.add_full(W.hbox(W.check("depth profiles", ov["npz_profiles"]),
                             W.check("strain map η(z,t), if recorded",
                                     ov["npz_strain"]), margins=(18, 0, 0, 0)))
-        sec.add_full(self._check_info("Metadata JSON (inputs with units, "
-                                      "converted values, placeholders, run time)",
+        sec.add_full(self._check_info("Metadata JSON (inputs, converted values, "
+                                      "placeholders, timing)",
                                       ov["meta_json"], "out_meta"))
         sec.add_full(self._check_info("Figures", ov["figures"], "out_figures"))
         sec.add_full(W.hbox(W.check("ΔR/R", ov["fig_drr"]),
@@ -1342,6 +1347,23 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
             self._sized = True
             w = min(580, max(420, int(self.width() * 0.36)))
             self._hsplit.setSizes([w, max(400, self.width() - 88 - w)])
+            QtCore.QTimer.singleShot(0, self._fit_inspector)
+
+    def _fit_inspector(self):
+        """Widen the inspector when the page on show needs more room than it
+        has (a page's width is only known once it has been shown), up to
+        45 % of the window. Called on every page change, so rows added to a
+        page later can never be cut off."""
+        sa = self.pages.currentWidget()
+        if sa is None or sa.widget() is None:
+            return
+        need = (sa.widget().minimumSizeHint().width()
+                + sa.verticalScrollBar().sizeHint().width() + 2 * sa.frameWidth() + 2)
+        a, b = self._hsplit.sizes()
+        if a < need:
+            new = min(need, int(self.width() * 0.45))
+            if new > a:
+                self._hsplit.setSizes([new, max(300, a + b - new)])
 
     def closeEvent(self, e):
         if self.worker is not None and self.worker.is_alive():
