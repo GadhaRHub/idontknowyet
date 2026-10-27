@@ -36,6 +36,11 @@ PLOT_INK, PLOT_INK2, GRID_C = "#0b0b0b", "#52514e", "#d9d8d4"
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
 
+
+def _asset(name):
+    """Path of a file in assets/ written the way style sheets want it."""
+    return os.path.join(ASSETS, name).replace(os.sep, "/")
+
 FONT = "Segoe UI, Cantarell, Ubuntu, DejaVu Sans, Arial, sans-serif"
 
 
@@ -109,7 +114,18 @@ QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
     background: {PANEL}; border: 1px solid {BERRY}; }}
 QLineEdit:read-only {{ color: {INK2}; }}
 QLineEdit:disabled, QComboBox:disabled {{ color: #a39aa0; }}
-QComboBox::drop-down {{ border: none; width: 18px; }}
+QComboBox {{ padding-right: 20px; }}
+QComboBox::drop-down {{ border: none; width: 20px; }}
+QComboBox::down-arrow {{ image: url({_asset("chev_down.svg")}); width: 12px; height: 12px; }}
+QSpinBox, QDoubleSpinBox {{ padding-right: 18px; }}
+QSpinBox::up-button, QDoubleSpinBox::up-button {{ subcontrol-origin: border;
+    subcontrol-position: top right; width: 18px; border: none; background: transparent; }}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{ subcontrol-origin: border;
+    subcontrol-position: bottom right; width: 18px; border: none; background: transparent; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{ image: url({_asset("chev_up.svg")});
+    width: 10px; height: 10px; }}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image: url({_asset("chev_down.svg")});
+    width: 10px; height: 10px; }}
 QComboBox QAbstractItemView {{ background: {PANEL}; border: 1px solid {LINE};
     selection-background-color: {BERRY_LIGHT}; selection-color: {INK}; }}
 
@@ -128,7 +144,7 @@ QCheckBox::indicator, QRadioButton::indicator {{ width: 15px; height: 15px; }}
 QCheckBox::indicator {{ border: 1px solid {mix(INK2, "white", .4)};
     border-radius: 4px; background: {PANEL}; }}
 QCheckBox::indicator:checked {{ background: {BERRY}; border-color: {BERRY};
-    image: url({os.path.join(ASSETS, "check.svg").replace(os.sep, "/")}); }}
+    image: url({_asset("check.svg")}); }}
 
 /* segmented control */
 #seg {{ background: #F1EBEF; border-radius: 8px; }}
@@ -231,16 +247,29 @@ def app_icon():
     return icon
 
 
+_SMALL_SVGS = {
+    # check mark inside ticked check boxes
+    "check.svg": '<path d="M3.5 8.5l3 3 6-7" fill="none" stroke="white" '
+                 'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+    # arrows of combo boxes and spin boxes
+    "chev_down.svg": f'<path d="M4 6.5l4 4 4-4" fill="none" stroke="{INK2}" '
+                     'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    "chev_up.svg": f'<path d="M4 10l4-4 4 4" fill="none" stroke="{INK2}" '
+                   'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+}
+
+
 def ensure_assets():
-    """The check mark used inside ticked check boxes."""
-    path = os.path.join(ASSETS, "check.svg")
-    if not os.path.exists(path):
+    """Write the small SVGs the style sheet uses (check mark, arrows) if
+    they are missing from assets/."""
+    for name, body in _SMALL_SVGS.items():
+        path = os.path.join(ASSETS, name)
+        if os.path.exists(path):
+            continue
         try:
             os.makedirs(ASSETS, exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
-                f.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
-                        '<path d="M3.5 8.5l3 3 6-7" fill="none" stroke="white" '
-                        'stroke-width="2.2" stroke-linecap="round" '
-                        'stroke-linejoin="round"/></svg>')
+                f.write('<svg xmlns="http://www.w3.org/2000/svg" '
+                        f'viewBox="0 0 16 16">{body}</svg>')
         except OSError:
             pass
