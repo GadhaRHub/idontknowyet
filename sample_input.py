@@ -102,11 +102,12 @@ NK_KEYS = ["n_pump", "k_pump", "n_probe", "k_probe"]
 # acoustic loss of a layer: none, a viscosity, or an attenuation at a
 # reference frequency (converted to a viscosity, alpha ~ f^2)
 LOSS_MODES = ["none", "viscosity", "attenuation"]
-LOSS_DEFAULTS = dict(loss_mode="none", visc="", visc_unit="Pa·s", att="",
+LOSS_DEFAULTS = dict(loss_mode="none", visc="0", visc_unit="Pa·s", att="0",
                      att_unit="1/µm", att_f="100", att_f_unit="GHz")
 # graded interface between a layer and the one BELOW it
 GRAD_SHAPES = ["linear", "erf"]
-GRAD_DEFAULTS = dict(grad_on=False, grad_w="5", grad_w_unit="nm",
+# width 0 (or empty) = sharp interface
+GRAD_DEFAULTS = dict(grad_on=False, grad_w="0", grad_w_unit="nm",
                      grad_shape="linear")
 KFILL_KEYS = ["kfill_pump", "kfill_probe"]
 FILE_UNITS = ["auto", "nm", "µm", "Å", "m", "eV"]
@@ -628,7 +629,7 @@ def _layer_viscosity(lay, vals, tag, errors, report):
     """Viscosity (Pa s) of a layer from its loss inputs; 0 for no loss."""
     mode = lay.get("loss_mode", "none")
     if mode == "viscosity":
-        x = _float(lay["visc"], f"{tag}: viscosity", errors)
+        x = _float(lay["visc"] or "0", f"{tag}: viscosity", errors)
         if x is None:
             return 0.0
         eta = U.to_base(x, "viscosity", lay["visc_unit"])
@@ -637,7 +638,7 @@ def _layer_viscosity(lay, vals, tag, errors, report):
             return 0.0
         line = f"    loss        η = {lay['visc']} {lay['visc_unit']} -> {U.fmt(eta)} Pa·s"
     elif mode == "attenuation":
-        a = _float(lay["att"], f"{tag}: attenuation", errors)
+        a = _float(lay["att"] or "0", f"{tag}: attenuation", errors)
         f = _float(lay["att_f"], f"{tag}: attenuation frequency", errors)
         if a is None or f is None:
             return 0.0
@@ -675,10 +676,13 @@ def resolve_gradients(layers, stack, cfg):
             continue
         tag = (f"Interface {i + 1}|{i + 2} ({lay['material'].strip() or '?'} | "
                f"{layers[i + 1]['material'].strip() or '?'})")
-        x = _float(lay.get("grad_w", ""), f"{tag}: width", errors)
+        x = _float(lay.get("grad_w", "") or "0", f"{tag}: width", errors)
         if x is None:
             continue
         w = U.to_base(x, "thickness", lay.get("grad_w_unit", "nm"))
+        if w == 0:                         # width 0 = sharp
+            report.append(f"  {tag}: width 0 -> sharp")
+            continue
         shape = lay.get("grad_shape", "linear")
         grads.append(dict(interface=i + 1, width_nm=float(w), shape=shape))
         report.append(f"  {tag}: graded, {lay['grad_w']} {lay['grad_w_unit']} "

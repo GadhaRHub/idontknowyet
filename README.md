@@ -89,7 +89,7 @@ Clicking the text of a checkbox still just ticks or unticks it.
     probe wavelength;
   - dñ/dT;
   - optionally Ce, τ_ep and dñ/dTₑ for metals;
-  - optionally an **acoustic loss**: *None*, a viscosity η (Pa·s), or an
+  - optionally an **acoustic loss** (default: none, values 0): *None*, a viscosity η (Pa·s), or an
     amplitude attenuation α at a frequency (1/µm, 1/nm, 1/m, 1/cm or dB/µm,
     at GHz/THz). The stress gets a viscous term, σ = C11·η + η_visc·∂η/∂t,
     so α(f) = η_visc·ω²/(2ρv³) grows as f²: later echoes come back smaller
@@ -108,7 +108,7 @@ Clicking the text of a checkbox still just ticks or unticks it.
 - **Interfaces tab** (after Layers): tick *Graded interfaces*, then tick the
   interfaces that are graded and give each a width (nm, Å or µm) and a
   profile: *linear* (a straight ramp) or *erf* (a smooth step; the width is
-  the 10–90 % distance). Across the width, centred on the nominal interface,
+  the 10–90 % distance). By default every interface is sharp (width 0). Across the width, centred on the nominal interface,
   every property (ρ, C11, Cp, expansion, n and k at pump and probe,
   photoelastic and thermo-optic coefficients, loss) is a linear mix of the
   two layers. Layer thicknesses stay as given. The optics treat a graded

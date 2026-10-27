@@ -1509,7 +1509,7 @@ class App(tk.Tk):
             "straight ramp. erf: a smooth step (like interdiffusion or "
             "roughness); the width is the 10–90 % distance. A width may reach "
             "at most through a whole neighbouring layer (≤ 2 × its "
-            "thickness)."))
+            "thickness). Width 0 = sharp (the default)."))
         hint.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 4))
         hint.bind("<Configure>", lambda e: hint.config(
             wraplength=max(200, e.width - 8)))
@@ -1571,9 +1571,11 @@ class App(tk.Tk):
                            grad_w_unit=v_u.get(), grad_shape=v_s.get())
                 txt, col = (f"≤ {limit:g} nm" if limit else ""), INK2
                 try:
-                    w = U.to_base(float(v_w.get()), "thickness", v_u.get())
-                    if w <= 0:
-                        txt, col = "width must be > 0", "#c00000"
+                    w = U.to_base(float(v_w.get() or 0), "thickness", v_u.get())
+                    if w == 0:
+                        txt = "0 = sharp; " + txt
+                    elif w < 0:
+                        txt, col = "width must be ≥ 0", "#c00000"
                     elif limit and w > limit + 1e-9:
                         txt, col = (f"too wide: at most {limit:g} nm here",
                                     "#c00000")
@@ -1862,10 +1864,12 @@ class App(tk.Tk):
             rho = U.to_base(float(lay["rho"]), "density", lay["rho_unit"])
             v = U.to_base(float(lay["v"]), "velocity", lay["v_unit"])
             if mode == "viscosity":
-                eta = U.to_base(float(lay["visc"]), "viscosity", lay["visc_unit"])
+                eta = U.to_base(float(lay["visc"] or 0), "viscosity",
+                                lay["visc_unit"])
                 head = f"= {U.fmt(eta)} Pa·s"
             else:
-                alpha = U.to_base(float(lay["att"]), "attenuation", lay["att_unit"])
+                alpha = U.to_base(float(lay["att"] or 0), "attenuation",
+                                  lay["att_unit"])
                 f_hz = U.to_base(float(lay["att_f"]), "frequency", lay["att_f_unit"])
                 eta = M.viscosity_from_attenuation(alpha, rho, v, f_hz)
                 head = f"→ η = 2ρv³α/ω² = {U.fmt(eta)} Pa·s"
