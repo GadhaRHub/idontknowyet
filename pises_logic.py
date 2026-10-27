@@ -44,6 +44,7 @@ import traceback
 
 import numpy as np
 import matplotlib
+import matplotlib.layout_engine
 from matplotlib import colormaps
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
@@ -1158,9 +1159,9 @@ class Logic:
                                       facecolor="white", alpha=.8, hatch="xxx",
                                       edgecolor=INK2, lw=0, zorder=5))
         if cur is not None:
-            cb.ax.add_patch(Rectangle((0, cur - 0.5), 1, 1, transform=tr,
-                                      fill=False, edgecolor=INK, lw=2.4,
-                                      clip_on=False, zorder=6))
+            cb._diffr_cur = cb.ax.add_patch(
+                Rectangle((0, cur - 0.5), 1, 1, transform=tr, fill=False,
+                          edgecolor=INK, lw=2.4, clip_on=False, zorder=6))
         return cb
 
     def _register_sweep_cbar(self, panel, cb, batch):
@@ -1558,9 +1559,7 @@ class Logic:
         note = ""
         if (self.viewer_signal.get() == self.VIEWER_SIGNALS[0] and not use_bg):
             note = "  (no background fit in this sweep: original ΔR/R shown)"
-        head = (f"{self.sweep_title(batch)}\nshowing "
-                f"{runs[cur]['sweep_value']:g} {unit}  "
-                f"({vis.index(cur) + 1} of {len(vis)})" + note)
+        head = self._viewer_title(batch, cur, vis, note)
         ax = fig.add_subplot()
         mode = self.viewer_mode.get()
         off = (self._offset_value(self.viewer_offset)
@@ -1584,16 +1583,19 @@ class Logic:
         if off:
             ylab += f"  (curves offset by {off:g})"
         if mode != self.VIEWER_MODES[0]:
+            # every shown curve, the current one too (it is covered by the
+            # highlight): stepping then only moves the highlight
             for i in vis:
-                if i == cur or curves[i] is None:
+                if curves[i] is None:
                     continue
                 if mode == self.VIEWER_MODES[1]:
                     ax.plot(t, curves[i], color="#c8c8c8", lw=0.8)
                 else:
                     ax.plot(t, curves[i], color=cols[i], lw=1.0, alpha=.85)
+        hl = None
         if curves.get(cur) is not None:
-            ax.plot(t, curves[cur], color=cols[cur],
-                    lw=2.2 if mode != self.VIEWER_MODES[0] else 1.6)
+            hl, = ax.plot(t, curves[cur], color=cols[cur],
+                          lw=2.2 if mode != self.VIEWER_MODES[0] else 1.6)
         else:
             ax.text(0.5, 0.5, "no background fit for this thickness",
                     transform=ax.transAxes, ha="center", color=LIT_C)
@@ -1606,7 +1608,54 @@ class Logic:
         cb = self._add_sweep_cbar(fig, ax, batch, cols, cur=cur)
         auto = (ax.get_xlim(), ax.get_ylim())
         self._apply_viewer_range(ax, y=True)
-        return dict(cb=cb, ax=ax, auto=auto)
+        return dict(cb=cb, ax=ax, auto=auto, hl=hl, curves=curves, cols=cols,
+                    note=note)
+
+    def _viewer_title(self, batch, cur, vis, note):
+        runs = batch["runs"]
+        unit = runs[0].get("sweep_unit", "")
+        return (f"{self.sweep_title(batch)}\nshowing "
+                f"{runs[cur]['sweep_value']:g} {unit}  "
+                f"({vis.index(cur) + 1} of {len(vis)})" + note)
+
+    def _viewer_state_key(self, batch, vis):
+        """Everything a viewer frame depends on except the thickness shown:
+        while it is unchanged, stepping updates the figure in place."""
+        p = self.viewer_panel
+        return (id(batch), tuple(vis), self.viewer_mode.get(),
+                self.viewer_signal.get(), self.viewer_offset.get(),
+                self.scale_exp.get(), self.sweep_cmap.get(),
+                tuple(v.get() for v in self.viewer_range.values()),
+                repr(p.overrides), repr(p.styles),
+                tuple(self._run_colors(batch["runs"], True)),
+                getattr(p, "generation", 0))
+
+    def _viewer_fast(self, batch, vis, cur):
+        """Show another thickness by updating the drawn figure (highlight
+        curve, title, colour-bar frame): about 10x faster than redrawing, so
+        Play runs at the frames/s asked. False if a full redraw is needed."""
+        live = getattr(self, "_viewer_live", None)
+        if (not live or live["key"] != self._viewer_state_key(batch, vis)
+                or live["hl"] is None or live["curves"].get(cur) is None):
+            return False
+        p = self.viewer_panel
+        hl = live["hl"]
+        hl.set_ydata(live["curves"][cur])
+        hl.set_color(live["cols"][cur])
+        if not any(isinstance(o, dict) and o.get("title")
+                   for o in p.overrides.values()):   # a title typed by the user stays
+            live["ax"].set_title(self._viewer_title(batch, cur, vis, live["note"]))
+            W.fit_titles(p.fig)
+        patch = getattr(live["cb"], "_diffr_cur", None)
+        if patch is not None:
+            patch.set_y(cur - 0.5)
+        if p.fig.get_layout_engine() is not None and isinstance(
+                p.fig.get_layout_engine(),
+                matplotlib.layout_engine.ConstrainedLayoutEngine):
+            p.fig.set_layout_engine("none")      # positions stay as drawn
+        p.canvas.draw()
+        self._viewer_scale_update(vis, cur, batch)
+        return True
 
     def draw_viewer(self):
         self._viewer_job = None
@@ -1627,6 +1676,8 @@ class Logic:
         if getattr(self, "_viewer_ykey", ykey) != ykey:
             self._set_viewer_range(y=None)
         self._viewer_ykey = ykey
+        if self._viewer_fast(batch, vis, self.viewer_cur):
+            return "fast"
         fig = p.clear()
         d = self._draw_viewer_frame(fig, batch, self.viewer_cur)
         self._register_sweep_cbar(p, d["cb"], batch)
@@ -1645,6 +1696,7 @@ class Logic:
         ax.callbacks.connect("xlim_changed", self._viewer_zoomed)
         ax.callbacks.connect("ylim_changed", self._viewer_zoomed)
         self._viewer_scale_update(vis, self.viewer_cur, batch)
+        self._viewer_live = dict(d, key=self._viewer_state_key(batch, vis))
 
     # zoom range of the viewer: the boxes follow the zoom (scroll, zoom
     # tool, pan, Home) and are applied to every frame, so stepping or
@@ -1771,6 +1823,7 @@ class Logic:
             self.play_btn.setText("▶ Play")
 
     def _play_step(self):
+        self._frame_t0 = time.perf_counter()
         batch = self._viewer_batch()
         if batch is None:
             return self._stop_play()
@@ -1781,10 +1834,10 @@ class Logic:
                 return self._stop_play()
             pos = -1
         self.viewer_cur = vis[pos + 1]
-        self.draw_viewer()
         # draw now, then start the frame timer: frames never pile up and the
         # window stays responsive at any frame rate
-        self.viewer_panel.canvas.draw()
+        if self.draw_viewer() != "fast":
+            self.viewer_panel.canvas.draw()
         self._play_job = self.after_idle(self._play_schedule)
 
     def _play_schedule(self):
@@ -1792,7 +1845,11 @@ class Logic:
             fps = min(max(float(self.viewer_fps.get()), 0.2), 30.0)
         except ValueError:
             fps = 4.0
-        self._play_job = self.after(max(int(1000 / fps), 30), self._play_step)
+        # the time spent drawing counts towards the frame: frames/s is the
+        # rate seen, up to what the computer can draw
+        spent = time.perf_counter() - getattr(self, "_frame_t0", time.perf_counter())
+        self._play_job = self.after(max(int(1000 * (1 / fps - spent)), 1),
+                                    self._play_step)
 
     def save_gif(self):
         """The shown thicknesses as an animated GIF (one frame each)."""

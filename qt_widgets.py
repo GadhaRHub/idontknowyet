@@ -17,6 +17,7 @@ import os
 
 import numpy as np
 import matplotlib
+import matplotlib.layout_engine
 from matplotlib import colormaps
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import (FigureCanvasQTAgg,
@@ -790,8 +791,14 @@ class PlotPanel(QtWidgets.QWidget):
     # --- drawing protocol
     def clear(self):
         self.fig.clear()
+        # a fast in-place update (Sweep viewer) may have frozen the layout
+        if self.fig.get_layout_engine() is None or not isinstance(
+                self.fig.get_layout_engine(),
+                matplotlib.layout_engine.ConstrainedLayoutEngine):
+            self.fig.set_layout_engine("constrained")
         self.colorbars = []
         self._sweep = None
+        self.generation = getattr(self, "generation", 0) + 1
         return self.fig
 
     def finish(self):
