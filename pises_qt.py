@@ -1437,7 +1437,19 @@ def main(argv=None):
     T.ensure_assets()
     T.matplotlib_defaults()
     app.setStyleSheet(T.STYLE)
-    win = App()
+    try:
+        win = App()
+    except (AttributeError, ImportError, NameError, TypeError) as e:
+        # almost always: the program files come from different versions
+        # (e.g. a new pises_qt.py next to an old qt_widgets.py)
+        here = os.path.dirname(os.path.abspath(__file__))
+        msg = (f"PiSES could not start: {type(e).__name__}: {e}\n\n"
+               f"This usually means the program files in\n{here}\n"
+               f"come from different versions. Replace ALL of them together "
+               f"(every .py file, plus assets/), not only some.")
+        print(msg, file=sys.stderr)
+        messagebox.showerror("PiSES — files out of step", msg)
+        raise
     win.show()
     return app.exec()
 
