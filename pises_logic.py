@@ -1653,8 +1653,54 @@ class Logic:
                 p.fig.get_layout_engine(),
                 matplotlib.layout_engine.ConstrainedLayoutEngine):
             p.fig.set_layout_engine("none")      # positions stay as drawn
-        p.canvas.draw()
+        if getattr(self, "_playing", False):
+            self._viewer_blit(live)
+        else:
+            self._viewer_unblit()
+            p.canvas.draw()
         self._viewer_scale_update(vis, cur, batch)
+        return True
+
+    # While playing, the figure without the moving parts (highlight curve,
+    # title, colour-bar frame) is kept as a picture ("blitting"): a frame
+    # then only paints those parts on it, so even sweeps with many long
+    # curves play at the frames/s asked. Off again when Play stops, so
+    # saving and zooming see the ordinary figure.
+    def _viewer_moving(self, live):
+        return [a for a in (live["hl"], live["ax"].title,
+                            getattr(live["cb"], "_diffr_cur", None)) if a is not None]
+
+    def _viewer_blit(self, live):
+        p = self.viewer_panel
+        if live.get("bg_cid") is None:
+            for a in self._viewer_moving(live):
+                a.set_animated(True)
+
+            def on_draw(_e, live=live):        # any full draw: new background
+                if live is not getattr(self, "_viewer_live", None):
+                    return
+                live["bg"] = p.canvas.copy_from_bbox(p.fig.bbox)
+                self._viewer_paint(live)
+            live["bg_cid"] = p.canvas.mpl_connect("draw_event", on_draw)
+            p.canvas.draw()                    # paints and keeps the background
+            return
+        p.canvas.restore_region(live["bg"])
+        self._viewer_paint(live)
+
+    def _viewer_paint(self, live):
+        p = self.viewer_panel
+        for a in self._viewer_moving(live):
+            a.axes.draw_artist(a)
+        p.canvas.blit(p.fig.bbox)
+
+    def _viewer_unblit(self):
+        live = getattr(self, "_viewer_live", None)
+        if not live or live.get("bg_cid") is None:
+            return False
+        self.viewer_panel.canvas.mpl_disconnect(live.pop("bg_cid"))
+        live.pop("bg", None)
+        for a in self._viewer_moving(live):
+            a.set_animated(False)
         return True
 
     def draw_viewer(self):
@@ -1678,6 +1724,7 @@ class Logic:
         self._viewer_ykey = ykey
         if self._viewer_fast(batch, vis, self.viewer_cur):
             return "fast"
+        self._viewer_unblit()
         fig = p.clear()
         d = self._draw_viewer_frame(fig, batch, self.viewer_cur)
         self._register_sweep_cbar(p, d["cb"], batch)
@@ -1813,12 +1860,16 @@ class Logic:
         if self._viewer_batch() is None:
             return
         self.play_btn.setText("⏸ Pause")
+        self._playing = True
         self._play_job = self.after(10, self._play_step)
 
     def _stop_play(self):
         if getattr(self, "_play_job", None) is not None:
             self.after_cancel(self._play_job)
         self._play_job = None
+        self._playing = False
+        if self._viewer_unblit():                # back to the ordinary figure
+            self.viewer_panel.canvas.draw_idle()
         if hasattr(self, "play_btn"):
             self.play_btn.setText("▶ Play")
 
