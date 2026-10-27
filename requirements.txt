@@ -1,4 +1,5 @@
 numpy
 matplotlib
+PySide6
 # optional: used for the background fit when present (a built-in numpy fitter is used otherwise)
 scipy
