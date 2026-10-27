@@ -129,8 +129,8 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         split.addWidget(self._build_plot_area())
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        split.setSizes([540, max(600, self.width() - 540 - 88)])
         insp.setMinimumWidth(380)
+        self._hsplit = split
         body.addWidget(self._build_statusbar())
 
         for build in (self._page_experiment, self._page_layers,
@@ -361,21 +361,34 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         self.run_cb.setMinimumWidth(260)
         self.run_cb.activated.connect(lambda i: (
             self.view_run.set(self.run_cb.itemText(i)), self.redraw_run_plots()))
-        extra = [self._chip(t, var, self._update_plot_tabs, tip) for t, var, tip in (
-            ("Components", self.show_components,
-             "The four contributions to ΔR/R"),
-            ("Kernels & absorption", self.show_kernels,
-             "Photoelastic sensitivity kernel and pump absorption profile"),
-            ("Strain map", self.show_strain,
-             "η(z,t); switch on before the run (recording uses memory)"))]
+        # optional plot tabs: one menu with ticks, to keep the header short
+        extra = QtWidgets.QToolButton()
+        extra.setObjectName("tb")
+        extra.setText("Extra plots ▾")
+        extra.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        extra.setToolTip("Show more plot tabs (ΔR/R and the stack are always "
+                         "shown)")
+        menu = QtWidgets.QMenu(extra)
+        for text, var in (("Components (the four contributions)",
+                           self.show_components),
+                          ("Kernels & absorption", self.show_kernels),
+                          ("Strain map η(z,t) — switch on before the run",
+                           self.show_strain)):
+            a = menu.addAction(W.amp(text))
+            a.setCheckable(True)
+            a.setChecked(var.get())
+            a.toggled.connect(lambda on, v=var: (v.set(on), self._update_plot_tabs()))
+            var.trace_add("write", lambda *_, a=a, v=var: a.isChecked() != v.get()
+                          and a.setChecked(v.get()))
+        extra.setMenu(menu)
+        self.run_cb.setMinimumWidth(200)
         v.addWidget(W.hbox(
             QtWidgets.QLabel("Show run"), self.run_cb,
             self._chip("Overlay all runs", self.overlay, self.draw_drr,
                        "Show every run in memory on the ΔR/R plot"),
             W.InfoButton(self, "overlay"),
             W.button("Clear runs", self.clear_runs, "small"), None,
-            QtWidgets.QLabel("Extra plots"), *extra,
-            W.InfoButton(self, "extra_plots"), stretch=False))
+            extra, W.InfoButton(self, "extra_plots"), stretch=False))
 
         vsplit = QtWidgets.QSplitter(Qt.Orientation.Vertical)
         vsplit.setHandleWidth(6)
@@ -912,11 +925,18 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         else:
             parts.append(W.line_edit(self.lv[key], 90))
         parts.append(W.combo(self.lv[key + "_unit"], U.choices(kind), width=104))
-        conv = self._conv_label()
         mark = W.label("", "lit")
         self.lit_marks[key] = mark
-        parts += [conv, mark]
-        row = W.hbox(*parts, spacing=6)
+        parts.append(mark)
+        # the conversion sits on its own line under the value, so long
+        # texts never squeeze or overlap the literature mark
+        conv = self._conv_label()
+        row = QtWidgets.QWidget()
+        col = QtWidgets.QVBoxLayout(row)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        col.addWidget(W.hbox(*parts, spacing=6))
+        col.addWidget(W.hbox(LABEL_W + 6, conv, spacing=0, stretch=False))
 
         def upd():
             unit = self.lv[key + "_unit"].get()
@@ -1316,6 +1336,13 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
     # =================================================================
     # Closing
     # =================================================================
+    def showEvent(self, e):
+        super().showEvent(e)
+        if not getattr(self, "_sized", False):     # first show: inspector width
+            self._sized = True
+            w = min(580, max(420, int(self.width() * 0.36)))
+            self._hsplit.setSizes([w, max(400, self.width() - 88 - w)])
+
     def closeEvent(self, e):
         if self.worker is not None and self.worker.is_alive():
             if not messagebox.askyesno("Quit", "A calculation is running. Quit "
