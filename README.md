@@ -65,8 +65,8 @@ The window and taskbar use the PiSES icon (`assets/`: SVG, PNGs from 16 to
 
 ```
 ┌──────┬──────────────────────────────────────────────────────────────────┐
-│ icon │ PiSES  PicoSonar EchoStacks   session › Page   Open Save Import  │
-│      │                                                Export [▶ Run ▾]   │
+│ icon │ PiSES  PicoSonar EchoStacks   session › Page                     │
+│      │                                     Open  Save  Import  Export   │
 │ rail ├───────────────────┬──────────────────────────────────────────────┤
 │      │ inspector page    │ Show run [….]  Overlay  Clear   Extra plots  │
 │ Expe-│ (inputs of the    │ ┌ Stack & ΔR/R │ Components │ … │ Sweep viewer│
@@ -75,19 +75,27 @@ The window and taskbar use the PiSES icon (`assets/`: SVG, PNGs from 16 to
 │ Inter-│ sections)        │ ├────────────────────────────────────────────┤
 │ faces │                  │ │ Console: conversions · warnings · timings  │
 │ Sweep │                  │ └────────────────────────────────────────────┘
-│ …    ├───────────────────┴──────────────────────────────────────────────┤
+│ …    │                   │                                              │
+│ (▶)  │                   │                                              │
+│ Run  ├───────────────────┴──────────────────────────────────────────────┤
 │ Help │ ● status                    progress     λ pump · probe · dz      │
 └──────┴──────────────────────────────────────────────────────────────────┘
 ```
 
 - **Navigation rail** (left): Experiment, Layers, Interfaces, Sweep,
-  Background, Output. *Help* at the bottom opens "How to use", the unit
-  table, the list of literature placeholders and "About".
+  Background, Output, then the sienna **▶ Run** button. *Help* at the
+  bottom opens "How to use", the unit table, the list of literature
+  placeholders and "About".
+- **▶ Run** (in the rail): click it for *Run model (single run)*, *Run
+  thickness sweep*, *Cancel the calculation* and the placeholder list. Its
+  label shows the run mode: "Run model" or "Run sweep" ("Running…" while
+  a calculation runs). Choosing *Run thickness sweep* switches to sweep
+  mode: from then on the stack diagram shows the sweep on **every** page,
+  until you choose *Run model* again. The mode is saved with the session.
 - **Top bar**: *Open* (open a session, or start a new one from the example
   stack), *Save* (save / save as), *Import* (parameter file, fs-sonar
-  conf_file), *Export* (the selected run, or a sweep), and **▶ Run model**.
-  The ▾ next to Run has *Run thickness sweep*, *Cancel* and the placeholder
-  list. Keys: **F5** run, **F6** sweep, **Ctrl+S** save, **Ctrl+O** open.
+  conf_file), *Export* (the selected run, or a sweep). Keys: **F5** run,
+  **F6** sweep, **Ctrl+S** save, **Ctrl+O** open.
 - **Inspector**: the inputs of the page chosen in the rail. Every block can
   be folded by clicking its title. Drag the divider to its right to make it
   wider or narrower; it widens by itself when a page needs more room (up to
@@ -173,9 +181,12 @@ written below (to scale with *Proportional* widths).
 ### Sweep
 Pick a layer and give a start, an end and an increment in any thickness
 unit. The sweep follows that layer when it is renamed or moved; runs are
-labelled "Si3N4 (layer 4) = 100 nm". While this page is open the stack
-diagram marks the swept layer ("◀ thickness swept ▶", dashed frame, range,
-number of runs); after the sweep it marks it as run. The page lists what the
+labelled "Si3N4 (layer 4) = 100 nm". While this page is open, and on
+every page in sweep mode (▶ Run → *Run thickness sweep*), the stack diagram
+marks the swept layer ("◀ thickness swept ▶", dashed frame, range, number of
+runs): the sweep as set up now, or the sweep just run when nothing has
+changed since. The sweep is started from ▶ Run (or F6), not from this
+page. The page lists what the
 sweep will produce: number of simulations, files and their names, the
 estimated disk space and time. The same summary is shown for confirmation
 before the sweep starts. The time estimate uses the speed of the last run.

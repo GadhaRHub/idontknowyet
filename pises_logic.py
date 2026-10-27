@@ -29,6 +29,7 @@ Window hooks (implemented in pises_qt.App):
     _viewer_scale_update(vis, cur, batch)   Sweep viewer slider and label
     _viewer_is_current()            is the Sweep viewer tab on screen?
     _sweep_page_open()              is the Sweep page on screen?
+    _run_mode_changed()             the run mode (single / sweep) changed
     _go_to_layer(i)                 show the Layers page with layer i
 """
 
@@ -76,6 +77,9 @@ cmap_colors = W.cmap_colors
 
 class Logic:
     SUBSTRATE_KEY = SUBSTRATE_KEY
+    # "single" or "sweep": what Run last did. In sweep mode the stack diagram
+    # shows the sweep on every page, not only on the Sweep page.
+    run_mode = "single"
     VIEWER_MODES = ["Current curve only", "Current + others faint",
                     "All shown curves"]
     VIEWER_SIGNALS = ["ΔR/R − background", "ΔR/R"]
@@ -970,41 +974,55 @@ class Logic:
     def _sweep_marker(self):
         """What to mark as swept on the stack diagram, or None.
 
-        While the Sweep page is open: the sweep being set up. Otherwise, if
-        the ΔR/R plot shows a sweep: the sweep as it was run.
+        The sweep as it was run, if the last result is a sweep of this stack.
+        While the Sweep page is open, or in sweep mode (Run → Run thickness
+        sweep), the sweep as it is set up now, unless it is the one just run.
         """
-        planned = self._sweep_page_open()
-        if planned:
-            idx = self.sweep_index()
-            if idx is None:
-                return None
-            try:
-                p = self._sweep_plan()
-                vals, unit = p["vals"], p["unit"]
-                step = float(self.sweep_step.get())
-            except (ValueError, TypeError):
-                return dict(idx=idx, planned=True, title=self.layer_title(idx),
-                            range="(range not valid yet)",
-                            range_long="range not valid yet")
-        else:
-            b = self.batches[-1] if self.batches else None
-            if not b or b.get("kind") != "sweep" or "sweep_idx" not in b:
-                return None
-            idx, vals, unit = b["sweep_idx"], b["sweep_vals"], b["sweep_unit"]
-            step = b.get("sweep_step")
-            if idx >= len(self.layers) - 1:
-                return None
-            if b.get("stack_fp") != self._fingerprint(skip_d=idx, stack_only=True):
-                return None
+        done = self._run_sweep_marker()
+        if not (self._sweep_page_open() or self.run_mode == "sweep"):
+            return done
+        planned = self._planned_sweep_marker()
+        if planned is None or (done and done["key"] == planned["key"]):
+            return done
+        return planned
+
+    @staticmethod
+    def _marker(idx, vals, unit, step, title, planned):
         n = len(vals)
         rng = f"{vals[0]:g} → {vals[-1]:g} {unit}" if n > 1 else f"{vals[0]:g} {unit}"
         step_txt = f" in steps of {step:g} {unit}" if step and n > 1 else ""
-        title = (self.layer_title(idx) if planned else
-                 f"{b.get('sweep_name') or self.layers[idx]['material']} "
-                 f"(layer {idx + 1})")
         return dict(idx=idx, planned=planned, title=title,
                     range=f"{rng}\n({n} runs)",
-                    range_long=f"{rng}{step_txt}, {n} runs")
+                    range_long=f"{rng}{step_txt}, {n} runs",
+                    key=(idx, tuple(round(v, 9) for v in vals), unit))
+
+    def _planned_sweep_marker(self):
+        idx = self.sweep_index()
+        if idx is None:
+            return None
+        try:
+            p = self._sweep_plan()
+            vals, unit = p["vals"], p["unit"]
+            step = float(self.sweep_step.get())
+        except (ValueError, TypeError):
+            return dict(idx=idx, planned=True, title=self.layer_title(idx),
+                        range="(range not valid yet)",
+                        range_long="range not valid yet", key=None)
+        return self._marker(idx, vals, unit, step, self.layer_title(idx), True)
+
+    def _run_sweep_marker(self):
+        b = self.batches[-1] if self.batches else None
+        if not b or b.get("kind") != "sweep" or "sweep_idx" not in b:
+            return None
+        idx = b["sweep_idx"]
+        if idx >= len(self.layers) - 1:
+            return None
+        if b.get("stack_fp") != self._fingerprint(skip_d=idx, stack_only=True):
+            return None
+        title = (f"{b.get('sweep_name') or self.layers[idx]['material']} "
+                 f"(layer {idx + 1})")
+        return self._marker(idx, b["sweep_vals"], b["sweep_unit"],
+                            b.get("sweep_step"), title, False)
 
     def edit_stack_colors(self):
         W.StackColorDialog(self)
@@ -1833,9 +1851,16 @@ class Logic:
     def _existing(bases, suffixes):
         return [b + x for b in bases for x in suffixes if os.path.exists(b + x)]
 
+    def _set_run_mode(self, mode):
+        if mode != self.run_mode:
+            self.run_mode = mode
+            self.schedule_stack()
+            self._run_mode_changed()
+
     def run_single(self):
         if self._busy():
             return
+        self._set_run_mode("single")
         try:
             self._bg_settings()
         except ValueError as e:
@@ -1872,6 +1897,7 @@ class Logic:
     def run_sweep(self, ask=True):
         if self._busy():
             return
+        self._set_run_mode("sweep")
         try:
             self._bg_settings()
         except ValueError as e:
@@ -2234,6 +2260,7 @@ class Logic:
                                unit=self.sweep_unit.get()),
                     output=self._opts(),
                     next_run=self.run_counter + 1,
+                    run_mode=self.run_mode,
                     plot_styles={name: {str(k): v for k, v in pan.styles.items()}
                                  for name, pan in self.figure_panels().items()})
 
@@ -2289,6 +2316,8 @@ class Logic:
         if isinstance(k, int) and 0 <= k < len(self.layers) - 1:
             self._sweep_obj = self.layers[k]
             self._refresh_sweep_layers()
+        self.run_mode = st.get("run_mode", "single")
+        self._run_mode_changed()
         self._update_plot_tabs()
 
     def save_session(self):

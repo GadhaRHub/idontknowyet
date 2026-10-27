@@ -63,14 +63,17 @@ HELP_TEXT = """1. Experiment: pump/probe wavelengths, fluence, pulse length, tim
 
 3. Interfaces: optionally grade chosen interfaces (width, linear or erf).
 
-4. Run (F5). ΔR/R and the stack are always shown; switch on Components,
-   Kernels or Strain map for more plots. Use the toolbar (zoom, pan, home,
+4. Run: ▶ in the left bar → Run model (or F5). ΔR/R and the stack are
+   always shown; switch on Components, Kernels or Strain map (Extra plots ▾)
+   for more plots. Use the toolbar (zoom, pan, home,
    save image), the mouse wheel to zoom, and 'Axes & labels…' to edit
    titles, labels, limits and scales.
 
 5. Sweep: pick a layer and give start, end and increment. Before it starts
    you are told how many simulations and files it gives, the estimated
-   size and the estimated time. Run sweep with F6 or the ▾ next to Run.
+   size and the estimated time. Start it with ▶ Run in the left bar →
+   Run thickness sweep (or F6); the stack then shows the sweep on
+   every page until you choose Run model again.
 
 6. Background: fit and subtract a double-exponential background.
 

@@ -111,6 +111,7 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         self.rail = W.NavRail(PAGES)
+        self._build_run_menu()
         outer.addWidget(self.rail)
         body = QtWidgets.QVBoxLayout()
         body.setSpacing(0)
@@ -182,9 +183,11 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         widget.setVisible(bool(on))
 
     def _set_running(self, on):
-        self.run_btn.setEnabled(not on)
+        self._running = on
+        self.rail.run.set_state(self.run_mode, on)
+        self.act_single.setEnabled(not on)
         self.act_sweep.setEnabled(not on)
-        self.sweep_run_btn.setEnabled(not on)
+        self.act_cancel.setEnabled(on)
         self.cancel_btn.setVisible(on)
         self.status_dot.setStyleSheet(f"color: {T.SIENNA if on else T.TEAL};")
 
@@ -207,6 +210,9 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
 
     def _sweep_page_open(self):
         return self.rail.current == PAGE_SWEEP
+
+    def _run_mode_changed(self):
+        self.rail.run.set_state(self.run_mode, getattr(self, "_running", False))
 
     def _viewer_is_current(self):
         return self.ptabs.currentWidget() is self.viewer_panel
@@ -276,25 +282,26 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         h.addWidget(self._tool("⤓ Export", [
             ("Selected run (.csv, .npz, .json)…", self.export_run),
             ("Sweep (combined file)…", self.export_sweep)]))
-        run = QtWidgets.QToolButton()
-        run.setObjectName("run")
-        run.setCursor(Qt.CursorShape.PointingHandCursor)
-        run.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        act = QtGui.QAction("▶  Run model", run)
-        act.setToolTip("Run the model with the current inputs (F5)")
-        act.triggered.connect(lambda: self.run_single())
-        run.setDefaultAction(act)
-        m = QtWidgets.QMenu(run)
-        self.act_sweep = m.addAction("Run thickness sweep  (F6)",
+        return bar
+
+    def _build_run_menu(self):
+        """The menu of the ▶ Run item in the rail."""
+        m = QtWidgets.QMenu(self)
+        self.act_single = m.addAction("▶  Run model  (single run)\tF5",
+                                      lambda: self.run_single())
+        self.act_sweep = m.addAction("▶  Run thickness sweep\tF6",
                                      lambda: self.run_sweep())
-        m.addAction("Cancel the calculation", lambda: self.cancel())
+        m.addSeparator()
+        self.act_cancel = m.addAction("■  Cancel the calculation",
+                                      lambda: self.cancel())
+        self.act_cancel.setEnabled(False)
         m.addSeparator()
         m.addAction("List literature placeholders…",
                     lambda: self.show_placeholders())
-        run.setMenu(m)
-        self.run_btn = run
-        h.addWidget(run)
-        return bar
+        self.run_menu = m
+        run = self.rail.run
+        run.clicked.connect(lambda: m.popup(
+            run.mapToGlobal(QtCore.QPoint(run.width() - 8, 6))))
 
     def _build_statusbar(self):
         bar = QtWidgets.QFrame()
@@ -1142,9 +1149,11 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         sec.add_full(W.hbox(W.button("Output settings…",
                                      lambda: self.rail.select(PAGE_OUTPUT), "small")))
         v.addWidget(sec)
-        self.sweep_run_btn = W.button("▶  Run sweep (F6)", lambda: self.run_sweep(),
-                                      "accent")
-        v.addWidget(W.hbox(self.sweep_run_btn, margins=(16, 12, 16, 0)))
+        hint = W.label("Start the sweep with ▶ in the left bar → Run thickness "
+                       "sweep (or F6). The stack diagram then shows the sweep on "
+                       "every page.", "hint", wrap=True)
+        hint.setContentsMargins(16, 12, 16, 0)
+        v.addWidget(hint)
         v.addStretch(1)
         return p
 

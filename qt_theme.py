@@ -77,20 +77,14 @@ QPushButton#tb, QToolButton#tb {{ background: {PANEL}; border: 1px solid {LINE};
     border-radius: 8px; padding: 5px 12px; }}
 QPushButton#tb:hover, QToolButton#tb:hover {{ background: {BERRY_LIGHT}; }}
 QToolButton#tb::menu-indicator {{ image: none; }}
-QToolButton#run {{ background: {SIENNA}; color: white; font-weight: bold;
-    border: none; border-radius: 8px; padding: 6px 14px; }}
-QToolButton#run:hover {{ background: {mix(SIENNA, "white", .15)}; }}
-QToolButton#run:disabled {{ background: #d9cfd4; color: #8f858b; }}
-QToolButton#run {{ padding-right: 30px; }}
-QToolButton#run::menu-button {{ border-left: 1px solid rgba(255,255,255,0.35);
-    width: 22px; }}
-QToolButton#run::menu-arrow {{ width: 10px; }}
-
 /* navigation rail */
 #rail {{ background: {BG}; border-right: 1px solid {LINE}; }}
 #railitem {{ background: transparent; border: none; }}
 #raillabel {{ color: {INK2}; font-size: 9pt; }}
 #raillabel[active="true"] {{ color: {INK}; font-weight: bold; }}
+#runlabel {{ color: {SIENNA}; font-size: 9pt; font-weight: bold; }}
+#runlabel[busy="true"] {{ color: {INK2}; }}
+#railsep {{ background: {LINE}; }}
 
 /* inspector panels */
 #inspector {{ background: {PANEL}; border-right: 1px solid {LINE}; }}
@@ -218,6 +212,8 @@ RAIL_ICONS = {
                   'stroke-width="2"/>',
     "output": '<path d="M12 3v12m-5-5l5 5 5-5M4 20h16" fill="none" '
               'stroke="{c}" stroke-width="2"/>',
+    "run": '<path d="M8 5.5v13l10.5-6.5z" fill="{c}" stroke="{c}" '
+           'stroke-width="1.5" stroke-linejoin="round"/>',
     "help": '<circle cx="12" cy="12" r="9" fill="none" stroke="{c}" '
             'stroke-width="2"/><path d="M9.5 10a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 '
             '.8-1 1.7M12 16.5v.5" stroke="{c}" stroke-width="2" fill="none"/>',

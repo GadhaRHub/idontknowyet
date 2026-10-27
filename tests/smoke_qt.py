@@ -189,8 +189,16 @@ app._refresh_sweep_layers()
 app.sweep_start.set("100")
 app.sweep_end.set("300")
 app.sweep_step.set("100")
+app.rail.select(1)                       # Layers page: no sweep marker yet
+pump()
+check("single mode: no sweep marked outside the Sweep page",
+      app._sweep_marker() is None and app.rail.run.text.text() == "Run model")
 app.run_sweep(ask=False)
 wait()
+mk = app._sweep_marker()
+check("sweep mode: rail says 'Run sweep' and the stack marks the sweep on "
+      "another page", app.run_mode == "sweep" and mk is not None
+      and app.rail.run.text.text() == "Run sweep", str(mk))
 b = app.batches[-1] if app.batches else {}
 check("sweep finishes with 3 runs", b.get("kind") == "sweep"
       and len(b.get("runs", [])) == 3, app.status.text())

@@ -314,8 +314,43 @@ class RailItem(QtWidgets.QWidget):
             self.clicked.emit()
 
 
+class RunRailItem(RailItem):
+    """The ▶ Run item of the rail: a sienna button whose label shows what
+    Run does now ("Run model" or "Run sweep"), or "Running…"."""
+
+    def __init__(self):
+        super().__init__("run", "Run model")
+        self.text.setObjectName("runlabel")
+        self.set_state("single", False)
+
+    def set_active(self, on):           # never "selected" like a page
+        pass
+
+    def set_state(self, mode, running):
+        self.pill.setPixmap(T.svg_icon(T.RAIL_ICONS["run"], 22, "white")
+                            .pixmap(22, 22))
+        bg = "#cfc4ca" if running else T.SIENNA
+        self.pill.setStyleSheet(f"background: {bg}; border-radius: 16px;")
+        self.text.setText("Running…" if running else
+                          "Run sweep" if mode == "sweep" else "Run model")
+        self.text.setProperty("busy", "true" if running else "false")
+        self.text.style().unpolish(self.text)
+        self.text.style().polish(self.text)
+        self.setToolTip("Run: a single run (F5) or a thickness sweep (F6)")
+
+    def enterEvent(self, e):
+        if self.text.property("busy") != "true":
+            self.pill.setStyleSheet(f"background: {T.mix(T.SIENNA, 'white', .15)};"
+                                    f"border-radius: 16px;")
+
+    def leaveEvent(self, e):
+        if self.text.property("busy") != "true":
+            self.pill.setStyleSheet(f"background: {T.SIENNA}; border-radius: 16px;")
+
+
 class NavRail(QtWidgets.QFrame):
-    """The rail: app icon on top, one item per page, Help at the bottom."""
+    """The rail: app icon on top, one item per page, the ▶ Run item, Help at
+    the bottom."""
     page_changed = QtCore.Signal(int)
     help_clicked = QtCore.Signal()
 
@@ -338,6 +373,12 @@ class NavRail(QtWidgets.QFrame):
             it.clicked.connect(lambda i=i: self.select(i))
             v.addWidget(it)
             self.items.append(it)
+        sep = QtWidgets.QFrame()
+        sep.setObjectName("railsep")
+        sep.setFixedSize(48, 1)
+        v.addWidget(sep, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.run = RunRailItem()        # its menu is built by the window
+        v.addWidget(self.run)
         v.addStretch(1)
         self.help = RailItem("help", "Help")
         self.help.clicked.connect(self.help_clicked.emit)
