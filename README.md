@@ -239,7 +239,8 @@ session).
   and the total ΔR/R (*y scale*, *Offset*, *Sweep colours*).
 - **Extra tabs** (from *Extra plots ▾*): Components, Kernels & absorption,
   Strain map (switch it on *before* the run). The Background tab appears
-  when background subtraction is on, the Sweep viewer tab after a sweep.
+  only while background subtraction is switched on (Background page); the
+  Sweep viewer tab is always there.
 - **Every plot** has the matplotlib toolbar (home, back, forward, pan, zoom,
   subplots, save), mouse-wheel zoom, *Axes & labels…* (title, labels,
   limits, log/linear, grid, legend, font size), *Colours…* and *Reset
