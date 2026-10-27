@@ -793,6 +793,8 @@ class PlotColorDialog(Dialog):
 
     def build(self):
         body = QtWidgets.QWidget()
+        body.setObjectName("dlgbody")        # white, like the dialog
+        body.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         g = QtWidgets.QGridLayout(body)
         g.setVerticalSpacing(4)
         self.scroll.setWidget(body)

@@ -200,7 +200,7 @@ QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QMenu {{ background: {PANEL}; border: 1px solid {LINE}; padding: 4px; }}
 QMenu::item {{ padding: 5px 18px; border-radius: 5px; }}
 QMenu::item:selected {{ background: {BERRY_LIGHT}; color: {INK}; }}
-QDialog {{ background: {PANEL}; }}
+QDialog, #dlgbody {{ background: {PANEL}; }}
 """
 
 # --- rail icons (24x24 SVG paths, drawn in the given colour) --------------
