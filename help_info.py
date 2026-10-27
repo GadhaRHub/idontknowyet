@@ -413,7 +413,7 @@ HELP = {
         fill="Pick a layer above the substrate.",
         empty="The sweep cannot start without at least one layer above the "
               "substrate.",
-        code=[("diffr_gui.py", r"def run_sweep|layers\[idx\]\[\"d\"\]")]),
+        code=[("pises_logic.py", r"def run_sweep|layers\[idx\]\[\"d\"\]")]),
     "sweep_range": dict(
         title="Thickness range",
         what="Thicknesses to run: start, start + increment, … up to the end "
@@ -470,7 +470,7 @@ HELP = {
              "been subtracted.",
         fill="original, background-subtracted, or both.",
         empty="original.",
-        code=[("diffr_gui.py", r"bg_plot_main")]),
+        code=[("pises_logic.py", r"bg_plot_main")]),
     # ------------------------------------------------------------ output
     "out_folder": dict(
         title="Output folder",
@@ -489,7 +489,7 @@ HELP = {
         empty="Unticked: nothing is saved automatically (File → Export still "
               "works).",
         code=[("sample_input.py", r"def format_name"),
-              ("diffr_gui.py", r"def _sweep_plan|def _single_plan")]),
+              ("pises_logic.py", r"def _sweep_plan|def _single_plan")]),
     "out_csv": dict(
         title="CSV table",
         what="Text table with the time axis, ΔR/R and the chosen columns; "
@@ -521,21 +521,21 @@ HELP = {
         fill="Choose which plots, the format (png, pdf, svg) and the dpi.",
         empty="Unticked: no figures are saved automatically (the toolbar's "
               "save button still works).",
-        code=[("diffr_gui.py", r"def _save_figures|savefig")]),
+        code=[("pises_logic.py", r"def _save_figures|savefig")]),
     "out_overwrite": dict(
         title="Ask before overwriting",
         what="Whether you are asked before existing files are replaced.",
         fill="Tick (default) to be asked; untick to overwrite silently (the log "
              "lists what was replaced).",
         empty="Unticked: files are overwritten without asking.",
-        code=[("diffr_gui.py", r"def _confirm_overwrite")]),
+        code=[("pises_logic.py", r"def _confirm_overwrite")]),
     "out_counter": dict(
         title="Run / sweep number",
         what="The number {run} puts into file names. Single runs and sweeps "
              "share it.",
         fill="Type the next number, or Reset to 1 to reuse earlier names.",
         empty="Must be a whole number ≥ 1.",
-        code=[("diffr_gui.py", r"def _on_counter_edit|def reset_counter")]),
+        code=[("pises_logic.py", r"def _on_counter_edit|def reset_counter")]),
     # ------------------------------------------------------------ plots
     "overlay": dict(
         title="Overlay all runs",
@@ -543,7 +543,7 @@ HELP = {
              "Runs from different inputs are tagged [inputs A], [inputs B].",
         fill="Tick to overlay.",
         empty="Unticked: only the latest run or sweep is shown.",
-        code=[("diffr_gui.py", r"self\.overlay\.get\(\)|\[inputs ")]),
+        code=[("pises_logic.py", r"self\.overlay\.get\(\)|\[inputs ")]),
     "sweep_viewer": dict(
         title="Sweep viewer",
         what="Steps through the thicknesses of a finished sweep one curve at a "
@@ -564,7 +564,7 @@ HELP = {
              "curve up by n × offset when other curves are shown.",
         empty="Before a sweep has run, the tab only shows a hint. Blank range "
               "boxes: full range. Offset 0: no offset.",
-        code=[("diffr_gui.py", r"def _draw_viewer_frame|def save_gif|def _on_sweep_press|def _apply_viewer_range|def _viewer_sync_boxes")]),
+        code=[("pises_logic.py", r"def _draw_viewer_frame|def save_gif|def _on_sweep_press|def _apply_viewer_range|def _viewer_sync_boxes")]),
     "extra_plots": dict(
         title="Extra plots",
         what="Components: the four contributions to ΔR/R. Kernels & "

@@ -1,7 +1,7 @@
 """diffR thin-film forward model (pump-probe dR/R).
 
-Physics extracted verbatim from diffR_thinfilm_model_custom.ipynb; the GUI
-(diffr_gui.py) imports it. Internal units: lengths in nm, times in ps,
+Physics extracted verbatim from diffR_thinfilm_model_custom.ipynb; the PiSES window
+(pises_qt.py) imports it. Internal units: lengths in nm, times in ps,
 everything else SI.
 """
 

@@ -370,7 +370,6 @@ lower layers and shows the results.
 | `diffr_model.py` | The physics (see [The physics in diffr_model.py](#the-physics-in-diffr_modelpy)). | no |
 | `background.py` | `minus_exp_fun_single3` (unchanged) and `apply()` used by the window; scipy or a numpy fitter. | no |
 | `outputs.py` | `default_options()` (every Output-page setting), `write_run`, `write_sweep`, metadata, file-count / size / time estimates. | no |
-| `diffr_gui.py` | The previous Tkinter interface (kept for comparison; same features). | yes (tkinter) |
 | `assets/` | Icon files (`pises.svg`, PNGs, `.ico`); `check.svg`, `chev_down.svg`, `chev_up.svg` (tick mark and arrows used by the style sheet; rewritten by `qt_theme.ensure_assets()` if missing). | – |
 | `packaging/` | Linux menu entry (`pises.desktop`, `install_linux.sh`). | – |
 | `examples/` | An example parameter file. | – |
