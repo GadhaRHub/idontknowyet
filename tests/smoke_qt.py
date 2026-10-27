@@ -142,6 +142,27 @@ if runs:
     ref = M.run_model(stack, mats, cfg, verbose=False)
     check("window result == model called directly",
           np.array_equal(ref["drr"], runs[0]["res"]["drr"]))
+    # acoustic loss: attenuation reaches the model and the metadata; an
+    # unknown loss mode is an error, never silently "no loss"
+    import copy
+    lossy = copy.deepcopy(app.layers)
+    for lay in lossy:
+        lay.update(loss_mode="attenuation", att="1", att_unit="1/µm",
+                   att_f="100", att_f_unit="GHz")
+    cfg_l = dict(cfg, include_loss=True)
+    st_l, mats_l, _, _ = S.resolve_layers(lossy, cfg_l)
+    check("attenuation gives a viscosity in every layer",
+          all(m.eta_visc > 0 for m in mats_l.values()))
+    rows = S.materials_as_json(st_l, mats_l)
+    check("metadata records the viscosity", all(r.get("eta_visc", 0) > 0 for r in rows))
+    res_l = M.run_model(st_l, mats_l, cfg_l, verbose=False)
+    check("attenuation changes ΔR/R", not np.allclose(res_l["drr"], ref["drr"]))
+    lossy[0]["loss_mode"] = "att"
+    try:
+        S.resolve_layers(lossy, cfg_l)
+        check("unknown loss mode is reported", False, "no error raised")
+    except S.InputError:
+        check("unknown loss mode is reported", True)
 shot("single_run")
 
 # ---------------------------------------------------------------- dialogs

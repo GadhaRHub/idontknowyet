@@ -653,7 +653,11 @@ def _layer_viscosity(lay, vals, tag, errors, report):
         line = (f"    loss        α = {lay['att']} {lay['att_unit']} at "
                 f"{lay['att_f']} {lay['att_f_unit']} -> η = 2ρv³α/ω² = "
                 f"{U.fmt(eta)} Pa·s")
-    else:
+    elif mode in ("none", "", None):
+        return 0.0
+    else:                                  # never ignore a loss setting silently
+        errors.append(f"{tag}: unknown acoustic-loss mode '{mode}' (use 'none', "
+                      f"'viscosity' or 'attenuation')")
         return 0.0
     if "rho" in vals and "v" in vals and eta > 0:
         a = [M.attenuation_from_viscosity(eta, vals["rho"], vals["v"], fq) * 1e-6
@@ -724,7 +728,7 @@ def materials_as_json(stack, materials):
         m = materials[key]
         row = dict(layer=key, d_nm=d)
         for f in ("rho", "v", "Cp", "alpha_lin", "B_bulk", "n_pump", "n_probe",
-                  "dn_deta", "dn_dT", "dn_dTe", "Ce", "tau_ep_ps"):
+                  "dn_deta", "dn_dT", "dn_dTe", "Ce", "tau_ep_ps", "eta_visc"):
             x = getattr(m, f)
             row[f] = [x.real, x.imag] if isinstance(x, complex) else float(x)
         out.append(row)
