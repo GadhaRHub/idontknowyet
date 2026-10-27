@@ -90,10 +90,12 @@ The window and taskbar use the PiSES icon (`assets/`: SVG, PNGs from 16 to
   list. Keys: **F5** run, **F6** sweep, **Ctrl+S** save, **Ctrl+O** open.
 - **Inspector**: the inputs of the page chosen in the rail. Every block can
   be folded by clicking its title. Drag the divider to its right to make it
-  wider or narrower.
+  wider or narrower; it widens by itself when a page needs more room (up to
+  45 % of the window), so nothing on a page is cut off.
 - **Plots**: tabs for the stack and ΔR/R, plus optional tabs. Above them:
-  which run is shown, *Overlay all runs*, *Clear runs*, and the switches for
-  the extra plots (Components, Kernels & absorption, Strain map).
+  which run is shown, *Overlay all runs*, *Clear runs*, and the
+  **Extra plots ▾** menu that switches on the Components, Kernels &
+  absorption and Strain map tabs.
 - **Console** (dark, under the plots): every conversion to model units, the
   sample table, warnings, run diagnostics and timings. Drag the divider above
   it to give it more or less room; *Clear* empties it.
@@ -108,8 +110,9 @@ Every input has a small **ⓘ**. Click it for a menu:
   read from the source files when you open the window (so the line numbers
   match your copy), with the parameter highlighted.
 
-Grey text next to a field shows the value converted to the model's units
-(nm, ps, SI); it turns red when the field is not a number.
+Grey text next to a field (under it, for material properties) shows the
+value converted to the model's units (nm, ps, SI); it turns red when the
+field is not a number. Hover over it to read it in full if it is cut short.
 
 ## Pages
 
@@ -234,8 +237,9 @@ session).
 - **Stack & ΔR/R**: the stack diagram (click a layer to edit it; *Widths*:
   equal, proportional or log; *Colours…* per material, substrate included)
   and the total ΔR/R (*y scale*, *Offset*, *Sweep colours*).
-- **Extra tabs**: Components, Kernels & absorption, Strain map (switch it on
-  *before* the run), Background, Sweep viewer.
+- **Extra tabs** (from *Extra plots ▾*): Components, Kernels & absorption,
+  Strain map (switch it on *before* the run). The Background tab appears
+  when background subtraction is on, the Sweep viewer tab after a sweep.
 - **Every plot** has the matplotlib toolbar (home, back, forward, pan, zoom,
   subplots, save), mouse-wheel zoom, *Axes & labels…* (title, labels,
   limits, log/linear, grid, legend, font size), *Colours…* and *Reset
@@ -367,9 +371,10 @@ lower layers and shows the results.
 | `background.py` | `minus_exp_fun_single3` (unchanged) and `apply()` used by the window; scipy or a numpy fitter. | no |
 | `outputs.py` | `default_options()` (every Output-page setting), `write_run`, `write_sweep`, metadata, file-count / size / time estimates. | no |
 | `diffr_gui.py` | The previous Tkinter interface (kept for comparison; same features). | yes (tkinter) |
-| `assets/` | Icon files (`pises.svg`, PNGs, `.ico`) and `check.svg` (tick mark). | – |
+| `assets/` | Icon files (`pises.svg`, PNGs, `.ico`); `check.svg`, `chev_down.svg`, `chev_up.svg` (tick mark and arrows used by the style sheet; rewritten by `qt_theme.ensure_assets()` if missing). | – |
 | `packaging/` | Linux menu entry (`pises.desktop`, `install_linux.sh`). | – |
 | `examples/` | An example parameter file. | – |
+| `tests/smoke_qt.py` | Drives the real window without a screen and checks pages, every ⓘ, a run (against the model called directly), a sweep with saving, the Sweep viewer, sessions and dialogs. See [Testing a change](#testing-a-change). | yes |
 
 ### From a typed number to a result
 
@@ -491,8 +496,11 @@ and Cancel stop working.
        ax.plot(res["t_ps"], res["drr_x"])
        p.finish()
    ```
-3. Call it from `redraw_run_plots()`. For an optional tab, add a variable
-   and chip like *Components* and a line in `_update_plot_tabs`.
+3. Call it from `redraw_run_plots()`. For an optional tab: add a
+   `BooleanVar` in `App.__init__` (like `self.show_components`), add
+   `("X", self.show_x)` to the list that fills the *Extra plots ▾* menu in
+   `_build_plot_area`, and add `(self.show_x, self.x_panel)` to the list in
+   `_update_plot_tabs` (it shows/hides the tab and redraws it).
 4. To save it as a figure / keep its styles in sessions, add it to
    `Logic.figure_panels()` and `gui_common.FIGURE_PANELS`.
 
@@ -525,6 +533,12 @@ Helpers: `W.line_edit`, `W.combo` (`editable=True` for typing), `W.check`,
 `W.hbox(...)` (ints = spacing, `None` = stretch). React to changes with
 `var.trace_add("write", lambda *_: …)`; to keep a value in sessions add it
 to `Logic._state()` and `_apply_state()`.
+
+Width: labels made with `_lab_info` wrap onto two lines instead of being
+cut, and the inspector widens itself to fit the widest row of the page on
+show. Still, keep a row narrower than about 530 px (split a long row of
+boxes into two rows, as on the Output page), so the inspector need not grow
+on small screens. `tests/smoke_qt.py` fails if a page does not fit.
 
 ### Add a help entry (ⓘ)
 `help_info.py` → `HELP["key"] = dict(title=…, what=…, fill=…, empty=…,
@@ -630,12 +644,28 @@ of the notebook's model.
 ## Testing a change
 
 1. **Syntax:** `python -m py_compile *.py`.
-2. **The model alone** (no window): run the script in
+2. **The automatic check of the window:**
+   ```
+   python tests/smoke_qt.py            # about 15 s, opens no window
+   python tests/smoke_qt.py --shots    # also saves pictures of every page in tests/shots/
+   ```
+   It prints one PASS/FAIL line per check and ends with "N of N checks
+   passed" (exit code 0). It checks that every page opens and **fits the
+   inspector**, that **every ⓘ** opens its Help and Code windows (so a
+   missing `HELP` key is caught), that a single run gives **exactly** the
+   numbers of `diffr_model.run_model` called directly with the same inputs,
+   that a 3-thickness sweep finishes and saves its files, that the Sweep
+   viewer steps, keeps a typed zoom and plays, that a session survives
+   save → new → open unchanged, and that the dialogs open. When you add a
+   feature, add a check for it at the end of the script in the same style
+   (`check("what", condition, "detail")`).
+3. **The model alone** (no window): run the script in
    [Using the model without the window](#using-the-model-without-the-window)
    before and after your change and compare `res["drr"]` (e.g.
    `numpy.array_equal`). A change that should not alter results must give
    identical arrays.
-3. **The window:** `python pises_qt.py`, then:
+4. **By hand** (`python pises_qt.py`) for anything the script does not cover,
+   e.g.:
    - every page opens; every ⓘ opens Help and Code;
    - a single run (F5) finishes and the console shows "done";
    - a short sweep (Sweep page, 3 thicknesses) finishes; the Sweep viewer
@@ -643,7 +673,8 @@ of the notebook's model.
    - Save a session, start a new one, open the saved one: everything is
      back;
    - if you touched saving: switch on automatic saving and check the files.
-4. **Without a screen** (servers, CI): set `QT_QPA_PLATFORM=offscreen`; the
-   window can then be driven from a script (create `App()`, set variables,
-   call `run_single()`, process events until `app.worker` has finished,
-   `app.grab().save("shot.png")`).
+5. **Without a screen** (servers, CI): `tests/smoke_qt.py` sets
+   `QT_QPA_PLATFORM=offscreen` itself. Your own scripts can do the same:
+   create `App()`, set variables, call `run_single()`, process events until
+   `app.worker` has finished, `app.grab().save("shot.png")`; the smoke test
+   shows how, including answering message boxes automatically.
