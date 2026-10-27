@@ -130,7 +130,7 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         split.addWidget(self._build_plot_area())
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        insp.setMinimumWidth(380)
+        insp.setMinimumWidth(340)
         self._hsplit = split
         body.addWidget(self._build_statusbar())
 
@@ -265,11 +265,16 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         h.setContentsMargins(16, 6, 12, 6)
         h.setSpacing(8)
         h.addWidget(W.label(APP_NAME, "brand"))
-        h.addWidget(W.label(APP_SUB, "brandsub"))
-        h.addSpacing(18)
+        sub = W.label(APP_SUB, "brandsub")
+        h.addSpacing(4)
         self.crumb = W.label("", "crumb")
-        h.addWidget(self.crumb)
-        h.addStretch(1)
+        for w in (sub, self.crumb):     # may be cut short; never set a width
+            w.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                            QtWidgets.QSizePolicy.Policy.Preferred)
+            w.setMinimumWidth(0)
+        sub.setMinimumWidth(10)
+        h.addWidget(sub, 1)
+        h.addWidget(self.crumb, 3)
         h.addWidget(self._tool("📂 Open", [
             ("Open session…  (Ctrl+O)", self.open_session),
             ("New session (example stack)", self.new_session)]))
@@ -389,13 +394,13 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
                           and a.setChecked(v.get()))
         extra.setMenu(menu)
         self.run_cb.setMinimumWidth(200)
-        v.addWidget(W.hbox(
+        v.addWidget(W.flow(
             QtWidgets.QLabel("Show run"), self.run_cb,
-            self._chip("Overlay all runs", self.overlay, self.draw_drr,
-                       "Show every run in memory on the ΔR/R plot"),
-            W.InfoButton(self, "overlay"),
-            W.button("Clear runs", self.clear_runs, "small"), None,
-            extra, W.InfoButton(self, "extra_plots"), stretch=False))
+            W.hbox(self._chip("Overlay all runs", self.overlay, self.draw_drr,
+                              "Show every run in memory on the ΔR/R plot"),
+                   W.InfoButton(self, "overlay"), stretch=False),
+            W.button("Clear runs", self.clear_runs, "small"), 12,
+            W.hbox(extra, W.InfoButton(self, "extra_plots"), stretch=False)))
 
         vsplit = QtWidgets.QSplitter(Qt.Orientation.Vertical)
         vsplit.setHandleWidth(6)
@@ -410,6 +415,9 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         self.stack_panel = self._card(W.PlotPanel(self, figsize=(8, 1.9),
                                                   colors=False))
         self.stack_panel.redraw = self.draw_stack
+        # labels are fitted to the blocks at the drawn size: refit on resize
+        self.stack_panel.canvas.mpl_connect("resize_event",
+                                            lambda e: self.schedule_stack())
         self.stack_panel.controls.addWidget(QtWidgets.QLabel("Widths"))
         cb = W.combo(self.stack_mode, ["Equal widths", "Proportional",
                                        "Log thickness"])
@@ -516,17 +524,20 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         fps.setRange(1, 30)
         fps.setFixedWidth(64)
         bind_spin(fps, self.viewer_fps)
-        vp.top_rows.addWidget(W.hbox(
-            self.play_btn, QtWidgets.QLabel("frames/s"), fps,
-            W.check("loop", self.viewer_loop),
+        vp.top_rows.addWidget(W.flow(
+            W.hbox(self.play_btn, QtWidgets.QLabel("frames/s"), fps,
+                   W.check("loop", self.viewer_loop), stretch=False),
             W.button("Show all thicknesses", self._viewer_show_all, "small"),
             W.button("Save GIF…", self.save_gif, "small"),
             margins=(4, 0, 4, 0)))
-        rng = [QtWidgets.QLabel("x (delay) from"),
-               W.line_edit(self.viewer_range["x0"], 70), QtWidgets.QLabel("to"),
-               W.line_edit(self.viewer_range["x1"], 70), QtWidgets.QLabel("ps"), 10,
-               QtWidgets.QLabel("y from"), W.line_edit(self.viewer_range["y0"], 70),
-               QtWidgets.QLabel("to"), W.line_edit(self.viewer_range["y1"], 70),
+        # each group stays on one line; the groups wrap when narrow
+        rng = [W.hbox(QtWidgets.QLabel("x (delay) from"),
+                      W.line_edit(self.viewer_range["x0"], 70), QtWidgets.QLabel("to"),
+                      W.line_edit(self.viewer_range["x1"], 70), QtWidgets.QLabel("ps"),
+                      stretch=False), 10,
+               W.hbox(QtWidgets.QLabel("y from"), W.line_edit(self.viewer_range["y0"], 70),
+                      QtWidgets.QLabel("to"), W.line_edit(self.viewer_range["y1"], 70),
+                      stretch=False),
                W.button("Auto range", self._viewer_auto_range, "small",
                         "Forget the zoom: show the full delay range and all "
                         "curves"), 10, QtWidgets.QLabel("Offset")]
@@ -535,7 +546,7 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
                        "n-th shown curve is moved up by n × offset. Used when "
                        "other curves are shown (not in 'Current curve only'). "
                        "0 = none.")
-        vp.top_rows.addWidget(W.hbox(*rng, off, margins=(4, 0, 4, 0)))
+        vp.top_rows.addWidget(W.flow(*rng, off, margins=(4, 0, 4, 0)))
         self.viewer_scale = QtWidgets.QSlider(Qt.Orientation.Horizontal)
         self.viewer_scale.valueChanged.connect(self._on_viewer_slide)
         self.viewer_pos_lbl = W.label("", "note")
@@ -614,7 +625,7 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
     def _scroll(self, page):
         sa = QtWidgets.QScrollArea()
         sa.setWidgetResizable(True)
-        sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         sa.setWidget(page)
         return sa
 
@@ -764,7 +775,7 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(True)
         self.tree.setMaximumHeight(200)
-        for c, w_ in enumerate((30, 90, 100, 100, 70)):
+        for c, w_ in enumerate(self.TREE_MIN_W):
             self.tree.setColumnWidth(c, w_)
         self.tree.currentItemChanged.connect(self._on_tree_select)
         self.tree.itemDoubleClicked.connect(
@@ -787,14 +798,24 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         # --- layer
         sec = W.Section("Layer")
         self.mat_cb = W.combo(lv["material"], S.literature_names(), editable=True)
+        self.mat_cb.setMinimumWidth(150)       # long material names stay readable
+        self.mat_cb.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                  QtWidgets.QSizePolicy.Policy.Fixed)
         self.mat_cb.textActivated.connect(lambda *_: self.fill_literature(ask=True))
-        sec.add_row(self._lab_info("Material name", "material"), self.mat_cb,
-                    W.button("Fill from literature",
+        fill_btn = W.button("Fill from literature",
                              lambda: self.fill_literature(ask=True), "small",
                              "Pre-fill the properties from the LITERATURE table "
                              "in diffr_model.py (Si3N4, SiO2, Ti, Si, Al, Au). "
                              "Values still equal to the pre-fill are reported "
-                             "as literature placeholders when you run."))
+                             "as literature placeholders when you run.")
+        # name box and button share the value columns, so a wide name box
+        # does not widen the columns of the rows below
+        name_row = QtWidgets.QWidget()
+        nh = QtWidgets.QHBoxLayout(name_row)
+        nh.setContentsMargins(0, 0, 0, 0)
+        nh.addWidget(self.mat_cb, 1)
+        nh.addWidget(fill_btn)
+        sec.add_row(self._lab_info("Material name", "material"), name_row)
         self.d_entry = W.line_edit(lv["d"], 90)
         self.d_unit_cb = W.combo(lv["d_unit"], U.choices("thickness"), width=110)
         self.d_conv = self._conv_label()
@@ -993,10 +1014,22 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         if it is not None:
             for c, t in enumerate(self._tree_values(i)):
                 it.setText(c, t)
+                it.setToolTip(c, t)
+            self._fit_tree_columns()
             if i == self.sel:
                 self._text(self.editor_title, f"Layer {i + 1} · "
                            f"{self.layers[i]['material'].strip() or 'unnamed'}")
         self._update_mini_stack()
+
+    TREE_MIN_W = (30, 90, 100, 100, 70)
+
+    def _fit_tree_columns(self):
+        """Columns as wide as their longest entry (never narrower than the
+        defaults), so names and thicknesses are never cut short."""
+        for c, w_ in enumerate(self.TREE_MIN_W):
+            self.tree.resizeColumnToContents(c)
+            if self.tree.columnWidth(c) < w_:
+                self.tree.setColumnWidth(c, w_)
 
     def refresh_tree(self, select=None):
         self.tree.blockSignals(True)
@@ -1004,8 +1037,11 @@ class App(Logic, Scheduler, QtWidgets.QMainWindow):
         for i in range(len(self.layers)):
             it = QtWidgets.QTreeWidgetItem(list(self._tree_values(i)))
             it.setForeground(4, QtGui.QColor(T.LIT_C))
+            for c in range(it.columnCount()):
+                it.setToolTip(c, it.text(c))
             self.tree.addTopLevelItem(it)
         self.tree.blockSignals(False)
+        self._fit_tree_columns()
         if self.layers:
             sel = min(select if select is not None else (self.sel or 0),
                       len(self.layers) - 1)

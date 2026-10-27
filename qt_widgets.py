@@ -78,6 +78,115 @@ def hbox(*widgets, spacing=6, margins=(0, 0, 0, 0), stretch=True):
     return w
 
 
+class FlowLayout(QtWidgets.QLayout):
+    """A row that wraps onto more lines when the window is narrow, so a row
+    of controls never sets a minimum width for the whole window. A label is
+    kept on the same line as the widget after it. addSpacing() works;
+    addStretch() is accepted and ignored (lines are left-aligned)."""
+
+    def __init__(self, parent=None, spacing=6, margins=(0, 0, 0, 0)):
+        super().__init__(parent)
+        self._items = []
+        self._hgap, self._vgap = spacing, 4
+        self.setContentsMargins(*margins)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def addSpacing(self, w):
+        self.addItem(QtWidgets.QSpacerItem(w, 1, QtWidgets.QSizePolicy.Policy.Fixed,
+                                           QtWidgets.QSizePolicy.Policy.Minimum))
+
+    def addStretch(self, *_):
+        pass
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, w):
+        return self._layout(QtCore.QRect(0, 0, w, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        h = self._layout(rect, False)
+        if h != getattr(self, "_h", None):
+            # the number of lines changed: ask the parents for that height
+            # (containers such as splitters only look at minimumSize)
+            self._h = h
+            QtCore.QTimer.singleShot(0, self.invalidate)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        s = QtCore.QSize()
+        for it in self._items:          # the widest single item (with its label)
+            s = s.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        s += QtCore.QSize(m.left() + m.right(), m.top() + m.bottom())
+        if getattr(self, "_h", None):   # height of the lines at the current width
+            s.setHeight(max(s.height(), self._h))
+        return s
+
+    def _visible(self):
+        return [it for it in self._items
+                if it.widget() is None or not it.widget().isHidden()]
+
+    def _layout(self, rect, test):
+        m = self.contentsMargins()
+        r = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        items = self._visible()
+        x, y, line_h = r.x(), r.y(), 0
+        lines, line = [], []
+        for k, it in enumerate(items):
+            w = it.sizeHint().width()
+            need = w
+            if isinstance(it.widget(), QtWidgets.QLabel) and k + 1 < len(items):
+                need += self._hgap + items[k + 1].sizeHint().width()   # keep with next
+            if line and x + need > r.right() + 1:
+                lines.append((line, line_h))
+                x, y, line_h, line = r.x(), y + line_h + self._vgap, 0, []
+            line.append((it, x, w))
+            x += w + self._hgap
+            line_h = max(line_h, it.sizeHint().height())
+        if line:
+            lines.append((line, line_h))
+        if not test:
+            yy = r.y()
+            for line, h in lines:
+                for it, xx, w in line:
+                    ih = min(h, it.sizeHint().height())
+                    it.setGeometry(QtCore.QRect(xx, yy + (h - ih) // 2, w, ih))
+                yy += h + self._vgap
+        total = sum(h for _, h in lines) + self._vgap * max(0, len(lines) - 1)
+        return total + m.top() + m.bottom()
+
+
+def flow(*widgets, spacing=6, margins=(0, 0, 0, 0)):
+    """Like hbox(), but the row wraps when there is not enough width. ints
+    are spacing; None is ignored."""
+    w = QtWidgets.QWidget()
+    lay = FlowLayout(w, spacing, margins)
+    for x in widgets:
+        if isinstance(x, int):
+            lay.addSpacing(x)
+        elif x is not None:
+            lay.addWidget(x)
+    return w
+
+
 def line_edit(var, width=None, placeholder=""):
     e = QtWidgets.QLineEdit()
     if width:
@@ -92,8 +201,10 @@ def combo(var, values, editable=False, width=None):
     c.setEditable(editable)
     c.addItems([str(v) for v in values])
     c.setMaxVisibleItems(20)
-    if width:
-        c.setFixedWidth(width)
+    if width:                # never narrower than its longest entry + arrow
+        fm = c.fontMetrics()
+        longest = max((fm.horizontalAdvance(str(v)) for v in values), default=0)
+        c.setFixedWidth(max(width, longest + 60))
     return bind_combo(c, var)
 
 
@@ -536,6 +647,56 @@ class Toolbar(NavigationToolbar2QT):
                 a.setIcon(T.svg_icon(TOOL_ICONS[a.text()], 20, T.INK2))
 
 
+def full_title(ax):
+    """The title as set, before fit_titles() shrank or wrapped it."""
+    t = ax.title
+    if t.get_text() == getattr(ax, "_pises_fitted", None):
+        return ax._pises_full
+    return t.get_text()
+
+
+def fit_titles(fig):
+    """Fit every axes title into the figure width: smaller font (down to
+    8 pt), then wrapped at spaces. The title as set is kept, so the next
+    call (e.g. after a resize) starts again from it."""
+    try:
+        r = fig.canvas.get_renderer()
+    except Exception:
+        return
+    avail = fig.bbox.width - 16
+    for ax in fig.axes:
+        t = ax.title
+        cur = t.get_text()
+        if not cur:
+            continue
+        if (cur == getattr(ax, "_pises_fitted", None)
+                and t.get_fontsize() == getattr(ax, "_pises_fitted_fs", None)):
+            full, fs = ax._pises_full, ax._pises_fs      # undo the last fit
+        else:
+            full, fs = cur, t.get_fontsize()             # a new title
+            ax._pises_full, ax._pises_fs = full, fs
+        t.set_text(full)
+        t.set_fontsize(fs)
+        width = lambda: t.get_window_extent(r).width
+        while width() > avail and t.get_fontsize() > 8:
+            t.set_fontsize(t.get_fontsize() - 1)
+        if width() > avail:                              # wrap at spaces
+            out = []
+            for line in full.split("\n"):
+                cur_line = ""
+                for word in line.split(" "):
+                    trial = f"{cur_line} {word}" if cur_line else word
+                    t.set_text(trial)
+                    if cur_line and width() > avail:
+                        out.append(cur_line)
+                        cur_line = word
+                    else:
+                        cur_line = trial
+                out.append(cur_line)
+            t.set_text("\n".join(out))
+        ax._pises_fitted, ax._pises_fitted_fs = t.get_text(), t.get_fontsize()
+
+
 class PlotPanel(QtWidgets.QWidget):
     """A matplotlib figure with the standard toolbar (zoom, pan, home, save),
     scroll-wheel zoom, and an editor for titles, labels, limits and scales.
@@ -556,13 +717,17 @@ class PlotPanel(QtWidgets.QWidget):
         v = QtWidgets.QVBoxLayout(self)
         v.setContentsMargins(6, 4, 6, 4)
         v.setSpacing(2)
-        bar = QtWidgets.QHBoxLayout()
+        # toolbar row and plot-specific rows wrap when the window is narrow
+        bar_w = QtWidgets.QWidget()
+        bar = FlowLayout(bar_w)
         self.toolbar = Toolbar(self.canvas, self)
         self.toolbar.setIconSize(QtCore.QSize(18, 18))
         self.toolbar.setStyleSheet("QToolBar { border: none; background: transparent; }")
-        bar.addWidget(self.toolbar, 1)
-        self.controls = QtWidgets.QHBoxLayout()
-        bar.addLayout(self.controls)
+        bar.addWidget(self.toolbar)
+        controls_w = QtWidgets.QWidget()
+        self.controls = QtWidgets.QHBoxLayout(controls_w)
+        self.controls.setContentsMargins(0, 0, 0, 0)
+        bar.addWidget(controls_w)
         b = button("Axes & labels…", self.edit_axes, "small",
                    "Edit title, axis labels, limits, log/linear scale, grid, "
                    "legend and font size")
@@ -573,11 +738,11 @@ class PlotPanel(QtWidgets.QWidget):
                                  "curves from a colour map, or change the "
                                  "colour map of an image plot"))
         bar.addWidget(button("Reset labels", self.reset_overrides, "small"))
-        v.addLayout(bar)
+        v.addWidget(bar_w)
         # extra rows for plot-specific settings; empty rows take no space
-        self.row2 = QtWidgets.QHBoxLayout()
-        self.row2.setContentsMargins(4, 0, 4, 0)
-        v.addLayout(self.row2)
+        row2_w = QtWidgets.QWidget()
+        self.row2 = FlowLayout(row2_w, margins=(4, 0, 4, 0))
+        v.addWidget(row2_w)
         self.top_rows = QtWidgets.QVBoxLayout()
         v.addLayout(self.top_rows)
         v.addWidget(self.canvas, 1)
@@ -588,6 +753,8 @@ class PlotPanel(QtWidgets.QWidget):
         self._orig_savefig = self.fig.savefig
         self.fig.savefig = self._savefig_keep_plot_size
         self.canvas.mpl_connect("scroll_event", self._on_scroll)
+        self.canvas.mpl_connect("resize_event", lambda e: (
+            fit_titles(self.fig), self.canvas.draw_idle()))
 
     # --- saving keeps the plot area the size it has on screen
     def _side_inches(self):
@@ -630,6 +797,7 @@ class PlotPanel(QtWidgets.QWidget):
     def finish(self):
         self.apply_styles()
         self.apply_overrides()
+        fit_titles(self.fig)
         self.canvas.draw_idle()
         self.toolbar.update()          # resets the home view to this drawing
 
@@ -805,7 +973,7 @@ class PlotColorDialog(Dialog):
         super().__init__(panel, "Plot colours", 460, 420)
         self.panel = panel
         axes = panel.data_axes()
-        self.names = [f"{i + 1}: {a.get_title() or '(untitled)'}"
+        self.names = [f"{i + 1}: {full_title(a) or '(untitled)'}"
                       for i, a in enumerate(axes)]
         self.which = QtWidgets.QComboBox()
         self.which.addItems(self.names)
@@ -969,7 +1137,7 @@ class AxesDialog(Dialog):
         self.lay.addLayout(f)
         r = 0
         self.which = QtWidgets.QComboBox()
-        self.which.addItems([f"{i + 1}: {a.get_title() or '(untitled)'}"
+        self.which.addItems([f"{i + 1}: {full_title(a) or '(untitled)'}"
                              for i, a in enumerate(axes)])
         if len(axes) > 1:
             f.addWidget(QtWidgets.QLabel("Plot"), r, 0)
@@ -1013,7 +1181,7 @@ class AxesDialog(Dialog):
 
     def load(self):
         ax = self.axes[self.idx()]
-        self.v["title"].set(ax.get_title())
+        self.v["title"].set(full_title(ax))
         self.v["xlabel"].set(ax.get_xlabel())
         self.v["ylabel"].set(ax.get_ylabel())
         x0, x1 = ax.get_xlim()

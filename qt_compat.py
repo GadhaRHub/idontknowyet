@@ -62,12 +62,22 @@ def _quiet(widget, fn):
         widget.blockSignals(old)
 
 
+def _show_start(edit):
+    """After text is set from code, show its beginning (Qt leaves the cursor
+    at the end, so a long value shows only its tail), unless the user is
+    typing in the box."""
+    if not edit.hasFocus():
+        edit.setCursorPosition(0)
+
+
 def bind_line(edit, var):
     """QLineEdit <-> StringVar."""
-    _quiet(edit, lambda: edit.setText(var.get()))
+    def to_widget():
+        _quiet(edit, lambda: edit.setText(var.get()))
+        _show_start(edit)
+    to_widget()
     edit.textChanged.connect(lambda s: var.get() != s and var.set(s))
-    var.trace_add("write", lambda *_: edit.text() != var.get() and _quiet(
-        edit, lambda: edit.setText(var.get())))
+    var.trace_add("write", lambda *_: edit.text() != var.get() and to_widget())
     return edit
 
 
@@ -79,6 +89,7 @@ def bind_combo(combo, var):
         if combo.isEditable():
             if combo.currentText() != v:
                 _quiet(combo, lambda: combo.setCurrentText(v))
+                _show_start(combo.lineEdit())
             return
         i = combo.findText(v)
         if i < 0 and v:

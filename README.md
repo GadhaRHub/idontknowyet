@@ -551,6 +551,16 @@ show. Still, keep a row narrower than about 530 px (split a long row of
 boxes into two rows, as on the Output page), so the inspector need not grow
 on small screens. `tests/smoke_qt.py` fails if a page does not fit.
 
+In the plot area, build rows of controls with `W.flow(...)` (same arguments
+as `W.hbox`) rather than `W.hbox`: a flow row wraps onto more lines when the
+window is narrow, so it never sets a minimum width for the whole window
+(PlotPanel's `row2` and toolbar row are flow rows already). Group things
+that must stay together with an inner `W.hbox(..., stretch=False)`; a label
+always stays with the widget after it. The smoke test checks that the window
+can still be made narrower than 1000 px. Plot titles and the stack's block
+labels are fitted to the space automatically (`qt_widgets.fit_titles`,
+`Logic._fit_stack_labels`).
+
 ### Add a help entry (ⓘ)
 `help_info.py` → `HELP["key"] = dict(title=…, what=…, fill=…, empty=…,
 code=[("file.py", r"regex"), …])`. Every key passed to `InfoButton` /

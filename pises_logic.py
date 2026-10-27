@@ -835,6 +835,7 @@ class Logic:
         x = 0.0
         self._stack_x = []
         mark = self._sweep_marker()
+        labels = []                      # (text, x0, x1, name) per block
         for i, (lay, w) in enumerate(zip(self.layers, widths)):
             name = lay["material"].strip() or "?"
             sub = i == len(self.layers) - 1
@@ -853,11 +854,12 @@ class Logic:
             narrow = w / total < 0.07
             if w / total < 0.02 and not sub and not swept:   # hairline
                 txt = ""
-            ax.text(x + w / 2, 0.5, txt, ha="center", va="center",
-                    rotation=90 if narrow else 0, fontsize=8 if narrow else 9,
-                    color="white" if is_dark(col) else INK, clip_on=True,
-                    bbox=dict(facecolor=col, edgecolor="none", alpha=.85, pad=1)
-                    if sub else None)
+            lbl = ax.text(x + w / 2, 0.5, txt, ha="center", va="center",
+                          rotation=90 if narrow else 0, fontsize=8 if narrow else 9,
+                          color="white" if is_dark(col) else INK, clip_on=True,
+                          bbox=dict(facecolor=col, edgecolor="none", alpha=.85, pad=1)
+                          if sub else None)
+            labels.append((lbl, x, x + w, name))
             if i == self.sel:
                 ax.add_patch(Rectangle((x, -0.06), w, 1.12, fill=False,
                                        edgecolor=INK, lw=1.6))
@@ -897,6 +899,58 @@ class Logic:
                       f": {mark['title']} — {mark['range_long']}")
         ax.set_title(title)
         p.finish()
+        self._fit_stack_labels(fig, ax, labels)
+
+    @staticmethod
+    def _fit_stack_labels(fig, ax, labels):
+        """Make every block label fit inside its block at the current size:
+        smaller font, then vertical text, then the name only, then nothing
+        (the layer list still has it). Called after every redraw of the
+        stack, including on resize. (Titles are fitted by PlotPanel.)"""
+        try:
+            fig.canvas.draw()
+            r = fig.canvas.get_renderer()
+        except Exception:                # no renderer (e.g. while closing)
+            return
+        to_px = ax.transData.transform
+        for t, x0, x1, name in labels:
+            if not t.get_text():
+                continue
+            bw = abs(to_px((x1, 0))[0] - to_px((x0, 0))[0]) - 4
+            bh = abs(to_px((0, 1))[1] - to_px((0, 0))[1]) - 4
+
+            def fits():
+                bb = t.get_window_extent(r)
+                return bb.width <= bw and bb.height <= bh
+            if fits():
+                continue
+            full = t.get_text()
+            lines = full.split("\n")
+            rest = lines[1:]
+            # then shortened names ("Si3N4_PE…"), with and without the thickness
+            short = [lines[0][:k] + "…" for k in range(len(lines[0]) - 1, 2, -1)]
+            tries = ([(full, 0), (full, 90), (name, 0), (name, 90)]
+                     + [("\n".join([sn] + rest), 0) for sn in short]
+                     + [(sn, r_) for sn in short for r_ in (0, 90)])
+            # readable sizes first (a shortened name at 8-9 pt beats the
+            # full one at 6 pt), then the small sizes
+            done = False
+            for sizes in ((9, 8), (7, 6)):
+                for text, rot in tries:
+                    t.set_text(text)
+                    t.set_rotation(rot)
+                    for fs in sizes:
+                        t.set_fontsize(fs)
+                        if fits():
+                            done = True
+                            break
+                    if done:
+                        break
+                if done:
+                    break
+            if not done:
+                t.set_text("")
+        fig.canvas.draw_idle()
 
     def _update_mini_stack(self):
         if not hasattr(self, "mini_stack"):

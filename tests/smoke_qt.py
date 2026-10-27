@@ -117,6 +117,18 @@ for i, (key, title) in enumerate(P.PAGES):
           and need <= have, f"needs {need} px, has {have} px")
     shot(f"page_{key}")
 
+mw = app.minimumSizeHint().width()
+check("window can be made narrow (laptop screens)", mw <= 1000, f"minimum {mw} px")
+app.resize(900, 760)
+app.rail.select(len(P.PAGES) - 1)           # Output page in a narrow window
+pump()
+sa = app.pages.currentWidget()
+check("a page wider than the inspector scrolls sideways",
+      sa.widget().width() <= sa.viewport().width()
+      or sa.horizontalScrollBar().maximum() > 0)
+app.resize(1560, 910)
+pump()
+
 # ---------------------------------------------------------------- ⓘ
 keys = sorted({b.key for b in app.findChildren(W.InfoButton)})
 bad = []
