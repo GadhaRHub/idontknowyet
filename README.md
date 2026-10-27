@@ -1,6 +1,8 @@
-# diffR thin-film model — GUI
+<img src="assets/pises_128.png" width="96" align="right" alt="PiSES icon">
 
-An interactive desktop GUI (Tkinter + matplotlib) for the pump–probe
+# PiSES — PicoSonar EchoStacks
+
+Picosecond acoustics and ΔR/R of thin-film stacks: an interactive desktop GUI (Tkinter + matplotlib) for the pump–probe
 differential-reflectivity forward model in
 `diffR_thinfilm_model_custom.ipynb`.
 
@@ -8,6 +10,18 @@ differential-reflectivity forward model in
 pip install -r requirements.txt     # numpy, matplotlib (+ scipy, optional); tkinter ships with Python
 python diffr_gui.py
 ```
+
+### Icon and app menu entry
+
+The window and taskbar use the PiSES icon (`assets/`: SVG, PNGs from 16 to
+512 px, and `pises.ico` for Windows) on Linux, Windows and macOS.
+
+- **Linux:** `sh packaging/install_linux.sh` adds PiSES to your application
+  menu / dock with its icon (for your user only, in `~/.local/share`). It
+  writes `packaging/pises.desktop` with this folder's path filled in.
+- **Windows:** for a desktop shortcut, right-click the desktop → New →
+  Shortcut, target `pythonw C:\path\to\diffr_gui.py`, then Properties →
+  Change Icon → `assets\pises.ico`.
 
 ## Files
 

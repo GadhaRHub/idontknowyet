@@ -13,6 +13,7 @@ Needs numpy and matplotlib; tkinter ships with Python.
 import copy
 import json
 import os
+import sys
 import queue
 import threading
 import time
@@ -49,6 +50,31 @@ import units as U
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
           "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 INK, INK2, GRID_C, LIT_C = "#0b0b0b", "#52514e", "#d9d8d4", "#b35900"
+
+APP_NAME = "PiSES"
+APP_LONG = "PiSES — PicoSonar EchoStacks"
+ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+
+def set_app_icon(root):
+    """Window / taskbar icon (PNG sizes work on Linux, Windows and macOS).
+    On Windows the process also gets its own taskbar identity, so the icon
+    is not grouped under python.exe."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "PiSES.PicoSonarEchoStacks")
+        except Exception:
+            pass
+    try:
+        imgs = [tk.PhotoImage(master=root, file=os.path.join(ASSETS, f"pises_{s}.png"))
+                for s in (256, 64, 48, 32, 16)]
+        root.iconphoto(True, *imgs)
+        root._icon_imgs = imgs                 # keep a reference
+    except (tk.TclError, OSError):
+        pass                                   # no icon files: default icon
+
 
 # "Berry & indigo" palette for the window theme
 BG = "#FAF6F9"                  # panels (very light pink-white)
@@ -1189,8 +1215,9 @@ EXAMPLE_STACK = [("Ti", "15"), ("Si3N4", "9.44"), ("Ti", "14.37"),
 class App(tk.Tk):
 
     def __init__(self):
-        super().__init__()
-        self.title("diffR thin-film model")
+        super().__init__(className=APP_NAME)   # WM_CLASS, for Linux docks
+        self.title(APP_LONG)
+        set_app_icon(self)
         apply_theme(self)
         # fit the window to the screen (laptops, display scaling)
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
@@ -4605,7 +4632,7 @@ class App(tk.Tk):
             messagebox.showerror("Save session", f"{type(e).__name__}: {e}")
             return
         self.log(f"session saved: {self.session_path}")
-        self.title(f"diffR thin-film model — {os.path.basename(self.session_path)}")
+        self.title(f"{APP_NAME} — {os.path.basename(self.session_path)}")
 
     def save_session_as(self):
         p = filedialog.asksaveasfilename(
@@ -4628,7 +4655,7 @@ class App(tk.Tk):
             return
         self._apply_state(st)
         self.session_path = p
-        self.title(f"diffR thin-film model — {os.path.basename(p)}")
+        self.title(f"{APP_NAME} — {os.path.basename(p)}")
         self.log(f"session loaded: {p}")
 
     def new_session(self):
@@ -4639,7 +4666,7 @@ class App(tk.Tk):
                   layers=[])
         self._apply_state(st)
         self.session_path = None
-        self.title("diffR thin-film model")
+        self.title(APP_LONG)
         self.load_example()
 
     def load_example(self):
